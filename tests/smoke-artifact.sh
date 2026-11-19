@@ -46,12 +46,16 @@ case "$(uname -s)" in
 esac
 [ -n "$netfx" ] && frameworks="net8.0;net472"
 
+# nuget.config is read by dotnet, not by the shell: on Git Bash for Windows it needs a Windows path, not /d/a/....
+feed_native="$feed"
+if command -v cygpath > /dev/null 2>&1; then feed_native="$(cygpath -w "$feed")"; fi
+
 cat > "$app/nuget.config" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
     <clear />
-    <add key="local" value="$feed" />
+    <add key="local" value="$feed_native" />
     <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
   </packageSources>
   <packageSourceMapping>

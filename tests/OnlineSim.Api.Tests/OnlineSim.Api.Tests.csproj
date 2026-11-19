@@ -7,6 +7,8 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <RootNamespace>OnlineSim.Api.Tests</RootNamespace>
+    <!-- Required for IDE0005 (unused usings) under EnforceCodeStyleInBuild; the XML file itself is unused. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- CS1591: tests need no XML docs. xUnit1051: offline tests answer instantly, nothing to cancel. -->
     <NoWarn>$(NoWarn);CS1591;xUnit1051</NoWarn>
   </PropertyGroup>
@@ -15,6 +17,13 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
     <PackageReference Include="xunit.v3" Version="4.0.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
+  </ItemGroup>
+
+  <!-- Microsoft.Testing.Platform (xunit.v3) generates its own Microsoft.CodeAnalysis.EmbeddedAttribute. Compilers before
+       Roslyn 4.14 (.NET SDK 9.0.300) reject that (CS8336) when they also synthesize attributes, as for net472. On older SDKs
+       (the .NET 8 SDK in CI) the test project is compiled with a current compiler package instead. -->
+  <ItemGroup Condition="$([MSBuild]::VersionLessThan('$(NETCoreSdkVersion)', '9.0.300'))">
+    <PackageReference Include="Microsoft.Net.Compilers.Toolset" Version="4.14.0" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">

@@ -1,0 +1,17 @@
+bin/
+obj/
+artifacts/
+TestResults/
+*.user
+*.suo
+.vs/
+.idea/
+.DS_Store
+.env
+
+# docs site (standalone package in docs/)
+/docs/node_modules
+/docs/.nuxt
+/docs/.output
+/docs/.data
+/docs/dist

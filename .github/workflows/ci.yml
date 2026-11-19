@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The tests target net8.0 (and net472 on Windows): the .NET 8 runtime is needed with every SDK.
+      # The tests target net8.0, plus net472 on Windows with SDK 9.0.300+ (see the test project): the .NET 8 runtime is needed with every SDK.
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |

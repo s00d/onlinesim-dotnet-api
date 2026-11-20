@@ -1,0 +1,17 @@
+# OnlineSim.Api
+
+> Typed async C# / .NET client for the OnlineSim API, with a built-in offline mock.
+
+## Documentation Sets
+
+- [OnlineSim.Api — full docs](https://s00d.github.io/onlinesim-dotnet-api/llms-full.txt): Complete documentation of the OnlineSim.Api .NET SDK.
+
+## Documentation
+
+- [Changelog](https://s00d.github.io/onlinesim-dotnet-api/raw/changelog.md): Release notes of OnlineSim.Api.
+- [Free numbers](https://s00d.github.io/onlinesim-dotnet-api/raw/free.md): Public numbers and their SMS — client.Free. No API key needed.
+- [Numbers](https://s00d.github.io/onlinesim-dotnet-api/raw/numbers.md): Order a number, read its SMS, close it — client.Numbers.
+- [Rent](https://s00d.github.io/onlinesim-dotnet-api/raw/rent.md): Rent a number for days and receive every SMS sent to it — client.Rent.
+- [Testing](https://s00d.github.io/onlinesim-dotnet-api/raw/testing.md): Test your integration offline with MockOnlineSim — no network, key or money.
+- [User](https://s00d.github.io/onlinesim-dotnet-api/raw/user.md): Balance, profile, payments and the webhook URL — client.User.
+- [Webhooks](https://s00d.github.io/onlinesim-dotnet-api/raw/webhooks.md): Receive SMS as HTTP callbacks and parse them with Webhook.Parse.

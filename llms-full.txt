@@ -1,0 +1,673 @@
+# Changelog
+
+The full history is in [CHANGELOG.md](https://github.com/s00d/onlinesim-dotnet-api/blob/main/CHANGELOG.md){rel="&#x22;nofollow&#x22;"}.
+
+## 1.0.1
+
+- Fixed decoding against the current API: `RentSms.Code` `0` for `notify` SMS, `Profile.Number`/`Country` swapped types, optional `Operation.Response`, nullable free-list and payment fields; `PaymentHistory.Paylist` is kept when it arrives as a list.
+- `WaitCodeAsync` retries `TRY_AGAIN_LATER` (rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`.
+- `MockOnlineSim` follows the backend more closely: rent reservation and confirmation, `setOperationRevise` and `closeRentNum` answers, missing vs wrong key — see [Testing](https://s00d.github.io/onlinesim-dotnet-api/testing).
+
+## 1.0.0
+
+First release of the .NET SDK, on the same contract as the other OnlineSim SDKs (JS 2.1.0, PHP, Python, Go, Rust, Java, Ruby).
+
+- `OnlineSimClient` with `Numbers`, `Rent`, `User` and `Free` sections; async methods with `CancellationToken`; `netstandard2.0` and `net8.0` (.NET Framework 4.6.2+, .NET 6+, Unity/Mono).
+- The key is sent as a Bearer header, never in the URL; injectable `ITransport` (your own `HttpClient`).
+- Typed exceptions: `ApiException`, `NoNumberException`, `TransportException`, `WaitTimeoutException`.
+- `Numbers.WaitCodeAsync`: interval and timeout as `TimeSpan`, `KeepOpen`, `Since`, retries network errors, injectable delay and clock.
+- `Webhook.Parse` for inbound webhooks; webhook URL set / clear / logs.
+- `MockOnlineSim`: an offline fake of the API for your tests — see [Testing](https://s00d.github.io/onlinesim-dotnet-api/testing).
+
+
+# Free numbers
+
+## ListAsync
+
+Countries, the numbers of the selected country and the SMS of the selected number, in one call.
+
+```csharp
+Task<FreeList> ListAsync(int? country = null, string? number = null, int? page = null, int? count = null, CancellationToken cancellationToken = default)
+```
+
+| Param     | Type      | Default        | Description                                                     |
+| --------- | --------- | -------------- | --------------------------------------------------------------- |
+| `country` | `int?`    | `44` (server)  | Country code; an unknown one falls back to the first available. |
+| `number`  | `string?` | first number   | Number **without** the country code, as the keys of `Numbers`.  |
+| `page`    | `int?`    | `1`            | Page of `Messages`.                                             |
+| `count`   | `int?`    | server default | SMS per page, 10–500.                                           |
+
+`FreeList`:
+
+- `Countries`: list of `FreeCountry` — `Country`, `CountryText`, `CountryOriginal`
+- `Numbers`: `IReadOnlyDictionary<string, FreeNumber>` keyed by the short number — `Country`, `CountryOriginal`, `FullNumber`, `DataHumans`, `IsArchive`
+- `Messages`: a paginator of `FreeMessage` (`Id`, `Text`, `InNumber`, `MyNumber`, `Code`, `CreatedAt`, `DataHumans`) plus `Number` and `Country`; `Code` is `-` when no code was found
+
+```csharp
+var numbers = (await client.Free.ListAsync(country: 44)).Numbers;
+var shortNumber = numbers.Keys.FirstOrDefault();
+if (shortNumber != null)
+{
+    var messages = (await client.Free.ListAsync(country: 44, number: shortNumber, count: 20)).Messages;
+    foreach (var sms in messages.Data) Console.WriteLine($"{sms.InNumber} {sms.Code} {sms.Text}");
+}
+```
+
+
+# Numbers
+
+An operation (`tzid`) is one ordered number. Order it with `GetAsync`/`GetWithNumberAsync`, read the SMS with `StateOneAsync` or `WaitCodeAsync`, finish it with `CloseAsync` (or `BanAsync`). Countries are phone codes (`7`, `44`, …), services are slugs (`google`, `vkcom`, …) as returned by `TariffsAsync`. Every method also takes a `CancellationToken cancellationToken = default` as its last parameter (left out of the signatures below).
+
+## PriceAsync
+
+Price of one number, USD; `null` when the country has no price for the service.
+
+```csharp
+Task<decimal?> PriceAsync(string service, int country = 7)
+```
+
+| Param     | Type     | Default | Description   |
+| --------- | -------- | ------- | ------------- |
+| `service` | `string` | —       | Service slug. |
+| `country` | `int`    | `7`     | Country code. |
+
+```csharp
+decimal? usd = await client.Numbers.PriceAsync("google", 44);
+```
+
+Errors: `ApiException` `ERROR_NO_SERVICE`, `UNDEFINED_COUNTRY`.
+
+## GetAsync
+
+Order a number; returns the operation id. Freezes the price on the balance.
+
+```csharp
+Task<long> GetAsync(string service, int country = 7, IEnumerable<string>? reject = null)
+```
+
+| Param     | Type                   | Default      | Description                                       |
+| --------- | ---------------------- | ------------ | ------------------------------------------------- |
+| `service` | `string`               | —            | Service slug.                                     |
+| `country` | `int`                  | `7`          | Country code.                                     |
+| `reject`  | `IEnumerable<string>?` | profile list | Number prefixes to skip, e.g. `new[] { "4470" }`. |
+
+```csharp
+long tzid = await client.Numbers.GetAsync("google", 44, reject: new[] { "4470" });
+```
+
+Errors: `NoNumberException`; `ApiException` `WARNING_LOW_BALANCE`, `ERROR_NO_SERVICE`, `UNDEFINED_COUNTRY`, `EXCEEDED_CONCURRENT_OPERATIONS`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `TRY_AGAIN_LATER`.
+
+## GetWithNumberAsync
+
+Same as `GetAsync`, but returns the number right away.
+
+```csharp
+Task<NumberOrder> GetWithNumberAsync(string service, int country = 7, IEnumerable<string>? reject = null)
+```
+
+Returns `NumberOrder`: `Tzid`, `Number` (with `+`), `Country`, `Time` (seconds left), `Service`, `Title?`, `GuardIntervalRemainingSeconds?`.
+
+```csharp
+NumberOrder order = await client.Numbers.GetWithNumberAsync("google", 44);
+Console.WriteLine($"{order.Tzid}: {order.Number}");
+```
+
+Errors: as `GetAsync`.
+
+## StateAsync
+
+All operations of the account; empty when there are none.
+
+```csharp
+Task<IReadOnlyList<Operation>> StateAsync(bool messageToCode = true, SortOrder orderBy = SortOrder.Asc, bool msgList = false)
+```
+
+| Param           | Type        | Default | Description                                                               |
+| --------------- | ----------- | ------- | ------------------------------------------------------------------------- |
+| `messageToCode` | `bool`      | `true`  | `Msg` is the code only; `false` — the full SMS text.                      |
+| `orderBy`       | `SortOrder` | `Asc`   | Order of operations (`Asc`, `Desc`).                                      |
+| `msgList`       | `bool`      | `false` | All SMS in `MsgList` (`OperationSms`: `Service`, `Msg`) instead of `Msg`. |
+
+`Operation`: `Tzid`, `Response`, `Number?`, `Service?`, `Country?`, `Sum?`, `Time?` (seconds left), `Msg?`, `MsgList?`, `GuardIntervalRemainingSeconds?`, …
+`Response` is the state (`null` when no number could be issued), one of the `OperationStatus` constants: `TZ_INPOOL` (number being assigned), `TZ_NUM_WAIT` (waiting for SMS), `TZ_NUM_ANSWER` (SMS arrived), `TZ_OVER_OK` (finished), `ERROR_NO_ITEMS` (failed). `Msg` is `null` until the first SMS. The server caches answers for a few seconds.
+
+```csharp
+foreach (var op in await client.Numbers.StateAsync(orderBy: SortOrder.Desc))
+{
+    Console.WriteLine($"{op.Tzid} {op.Response} {op.Msg}");
+}
+```
+
+## StateOneAsync
+
+One operation.
+
+```csharp
+Task<Operation> StateOneAsync(long tzid, bool messageToCode = true, bool msgList = false)
+```
+
+```csharp
+var op = await client.Numbers.StateOneAsync(tzid);
+if (op.Response == OperationStatus.NumAnswer) Console.WriteLine(op.Msg);
+```
+
+Errors: `ApiException` `ERROR_NO_OPERATIONS` when the operation does not exist (any more).
+
+## WaitCodeAsync
+
+Poll the operation until a code arrives, then close it and return the code.
+
+```csharp
+Task<string> WaitCodeAsync(long tzid, WaitCodeOptions? options = null)
+```
+
+| `WaitCodeOptions` | Type       | Default                     | Description                                                                        |
+| ----------------- | ---------- | --------------------------- | ---------------------------------------------------------------------------------- |
+| `Interval`        | `TimeSpan` | 5 s                         | Poll interval.                                                                     |
+| `Timeout`         | `TimeSpan` | 10 min                      | Give up after.                                                                     |
+| `KeepOpen`        | `bool`     | `false`                     | Call `NextAsync` instead of `CloseAsync`, to wait for another SMS.                 |
+| `FullMessage`     | `bool`     | `false`                     | Return the full SMS text instead of the code.                                      |
+| `Since`           | `string?`  | `null`                      | Ignore this value (the previous code).                                             |
+| `Delay`, `Now`    | delegates  | `Task.Delay`, a `Stopwatch` | Injectable for tests: `Func<TimeSpan, CancellationToken, Task>`, `Func<TimeSpan>`. |
+
+Transient errors are retried until the timeout: `TransportException`, and `ApiException` `TRY_AGAIN_LATER` (the HTTP 429 rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`. Any other `ApiException` is thrown at once.
+
+```csharp
+var first = await client.Numbers.WaitCodeAsync(tzid, new WaitCodeOptions { KeepOpen = true });
+var second = await client.Numbers.WaitCodeAsync(tzid, new WaitCodeOptions { Since = first });
+```
+
+Errors: `WaitTimeoutException`; `ApiException` with code `TZ_OVER_OK` or `ERROR_NO_ITEMS` when the operation ended without a new code; any other `ApiException` from `StateOneAsync`/`CloseAsync`/`NextAsync`.
+
+## NextAsync
+
+Switch the operation to its next SMS and keep it open (for services that send several SMS).
+
+```csharp
+Task NextAsync(long tzid)
+```
+
+```csharp
+await client.Numbers.NextAsync(tzid);
+```
+
+Errors: `ApiException` `ERROR_WRONG_TZID` (not an operation of your account), `ERROR_NO_TZID`.
+
+## CloseAsync
+
+Finish the operation. An operation without SMS can be closed only after its guard interval (`GuardIntervalRemainingSeconds`); every attempt locks the tzid for 5 s.
+
+```csharp
+Task CloseAsync(long tzid)
+```
+
+```csharp
+await client.Numbers.CloseAsync(tzid);
+```
+
+Errors: `ApiException` `NO_COMPLETE_TZID`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `ERROR_WRONG_TZID`.
+
+## BanAsync
+
+Finish the operation and report the number as bad. Only before any SMS arrived.
+
+```csharp
+Task BanAsync(long tzid)
+```
+
+```csharp
+await client.Numbers.BanAsync(tzid);
+```
+
+Errors: as `CloseAsync`; `ApiException` with `Code` `"0"` when the operation already has an SMS — nothing is changed then.
+
+## TariffsAsync
+
+Services, prices and stock of every country, keyed by country code. No API key needed. The answer is large (a few MB); prefer `TariffsOneAsync`.
+
+```csharp
+Task<IReadOnlyDictionary<int, CountryStat>> TariffsAsync()
+```
+
+`CountryStat`: `Name`, `LocaleName?`, `Position`, `Code`, `Other?`, `New`, `Enabled`, `Services`; `Services` maps `service_<slug>` to `ServiceStat` (`Count?` — `null` when unknown, `Popular`, `Code`, `Price`, `Id`, `Service`, `Slug`).
+
+```csharp
+var all = await client.Numbers.TariffsAsync();
+Console.WriteLine($"{all.Count} countries");
+```
+
+## TariffsOneAsync
+
+Services, prices and stock of one country.
+
+```csharp
+Task<CountryStat> TariffsOneAsync(int country = 7)
+```
+
+```csharp
+var uk = await client.Numbers.TariffsOneAsync(44);
+foreach (var s in uk.Services.Values) Console.WriteLine($"{s.Slug} {s.Price} {s.Count}");
+```
+
+Errors: `ApiException` `NO_COUNTRY`.
+
+
+# Rent
+
+A rent keeps a number for `days` days. Its SMS come in `RentItem.Messages`, newest first. Every method also takes a `CancellationToken cancellationToken = default` as its last parameter.
+
+`GetAsync` reserves the price (it shows in `Zbalance`): the rent starts with `Status` `0` and `Checked` `false` and waits up to 20 minutes for its first SMS. The first SMS that is not a `notify` notice confirms it (`Status` `1`) and charges the price; without one the rent closes and the reservation is released. Some countries (`Confirm` in `TariffsAsync`, e.g. US numbers) are confirmed and charged at once.
+
+`RentItem`: `Tzid`, `Status`, `Number` (without the country code), `Country`, `Sum`, `Days`, `Hours`, `Time`, `TimeSeconds?`, `Extension`, `Extend`, `Messages`, `StartTime`, `StopTime`, `DayExtend?`, … —
+`Sum` is the cost in USD incl. extensions (a `decimal`; the server sends a number, or a decimal string in `StateAsync`), `Time` minutes left, `TimeSeconds` seconds left,
+`Extension` `0` not extendable / `1` extendable / `2` auto-extension, `Extend` maps days to the extension price (empty when not extendable),
+`Messages` is a list of `RentSms`: `Id`, `Service`, `Text`, `Code`, `CreatedAt` — `Code` is `""` when no code was found and `"0"` for a `notify` SMS (a prohibited sender; the server sends the integer `0`, the SDK normalises it to a string).
+
+## GetAsync
+
+Rent a number. The price is reserved; the first SMS charges it.
+
+```csharp
+Task<RentItem> GetAsync(int country = 7, int days = 1, bool extension = true)
+```
+
+| Param       | Type   | Default | Description                                     |
+| ----------- | ------ | ------- | ----------------------------------------------- |
+| `country`   | `int`  | `7`     | Country code.                                   |
+| `days`      | `int`  | `1`     | One of the tariff's `Days` keys.                |
+| `extension` | `bool` | `true`  | `false` makes the rent non-extendable for good. |
+
+```csharp
+var rent = await client.Rent.GetAsync(7, 7);
+Console.WriteLine($"{rent.Tzid} {rent.Number} {rent.Sum}");
+```
+
+Errors: `NoNumberException`; `ApiException` `UNDEFINED_DAYS`, `UNDEFINED_COUNTRY`, `WARNING_LOW_BALANCE`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `TRY_AGAIN_LATER`.
+
+## StateAsync
+
+All rents of the account.
+
+```csharp
+Task<IReadOnlyList<RentItem>> StateAsync()
+```
+
+```csharp
+foreach (var rent in await client.Rent.StateAsync())
+{
+    Console.WriteLine($"{rent.Number} {rent.Messages.FirstOrDefault()?.Code}");
+}
+```
+
+## StateOneAsync
+
+One rent.
+
+```csharp
+Task<RentItem> StateOneAsync(long tzid)
+```
+
+```csharp
+var messages = (await client.Rent.StateOneAsync(tzid)).Messages;
+```
+
+Errors: `ApiException` `ERROR_NO_OPERATIONS` for an unknown tzid.
+
+## ExtendAsync
+
+Extend a rent by `days` days and charge the balance at once. Only confirmed rents (`Status` `1` or `4`) created with `extension: true`.
+
+```csharp
+Task<RentItem> ExtendAsync(long tzid, int days = 1)
+```
+
+```csharp
+var rent = await client.Rent.ExtendAsync(tzid, 3);
+Console.WriteLine(rent.StopTime);
+```
+
+Errors: `ApiException` `TRY_AGAIN_LATER` (unknown tzid, not confirmed yet or closed, not extendable, unknown period, a repeat within 10 s), `WARNING_LOW_BALANCE`.
+
+## CloseAsync
+
+Return the number before the period ends. A rent that is not confirmed yet (`Status` `0`) and has no SMS can be closed only after 120 s; then, or with only `notify` SMS, the reservation is released. With a real SMS the rent is confirmed (charged) and closed. A confirmed rent closes without a refund. US numbers cannot be closed early.
+
+```csharp
+Task CloseAsync(long tzid)
+```
+
+```csharp
+await client.Rent.CloseAsync(tzid);
+```
+
+Errors: `ApiException` `ERROR_NO_OPERATIONS`, `NO_COMPLETE_TZID`, `NO_CLOSE_RENT_US`, `TRY_AGAIN_LATER`.
+
+## TariffsAsync
+
+Rent prices of every country, keyed by country code. No API key needed.
+
+```csharp
+Task<IReadOnlyDictionary<int, RentTariff>> TariffsAsync()
+```
+
+`RentTariff`: `Code`, `Name`, `Enabled`, `New`, `Position`, `Extend`, `Confirm?`, `Days`, `Count`, `ExtCounts?` — `Days` maps rent days to the price in USD, `Count` to the numbers available.
+
+```csharp
+var tariffs = await client.Rent.TariffsAsync();
+```
+
+## TariffsOneAsync
+
+Rent prices of one country.
+
+```csharp
+Task<RentTariff> TariffsOneAsync(int country = 7)
+```
+
+```csharp
+var tariff = await client.Rent.TariffsOneAsync(7);
+Console.WriteLine(tariff.Days[7]); // price of 7 days
+```
+
+Errors: `ApiException` `NO_COUNTRY` for a country without rent.
+
+
+# Testing
+
+`MockOnlineSim` is an in-process fake of the OnlineSim API that ships with the package. It is an `ITransport` that answers like the real backend — same shapes, same error codes, HTTP 456 for a wrong key — and keeps a balance, operations and rents. Your code talks to a normal `OnlineSimClient`, so nothing in it changes for tests. It is deterministic: no randomness, no clock, numbers and ids come from a counter. It is thread-safe.
+
+## Setup
+
+```csharp
+using OnlineSim.Api;
+
+var mock = new MockOnlineSim(new MockOptions { Balance = 10 });
+var client = mock.Client(); // an OnlineSimClient wired to the mock
+```
+
+| `MockOptions`   | Default                                                                         | Description                                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ApiKey`        | `"mock-key"`                                                                    | Key the mock accepts. `mock.Client()` uses it; `mock.Client(new OnlineSimClientOptions { ApiKey = "x" })` tests a wrong key.                         |
+| `Balance`       | `100`                                                                           | Starting balance, USD (`decimal`).                                                                                                                   |
+| `Prices`        | `{7: {vkcom: 0.5, telegram: 1.2, google: 0.3}, 44: {google: 0.2, vkcom: 0.36}}` | Number prices, `Dictionary<int, Dictionary<string, decimal>>` (country → service → USD); replaces the defaults. Also feeds `Numbers.TariffsAsync()`. |
+| `RentTariffs`   | `{7: {Days: {1: 1, 3: 2.5, 7: 5}, Extend: 1}}`                                  | Rent prices, `Dictionary<int, MockRentTariff>`; `Extend = 0` makes rents of that country non-extendable.                                             |
+| `GuardInterval` | `TimeSpan.Zero`                                                                 | Above zero: an operation without SMS, or an unconfirmed rent without any SMS, cannot be closed (`NO_COMPLETE_TZID`).                                 |
+
+```csharp
+using System.Collections.Generic;
+using OnlineSim.Api;
+
+var mock = new MockOnlineSim(new MockOptions
+{
+    Prices = new Dictionary<int, Dictionary<string, decimal>> { [44] = new Dictionary<string, decimal> { ["google"] = 0.25m } },
+    GuardInterval = TimeSpan.FromSeconds(120),
+});
+```
+
+`mock.Client(options?)` takes the usual [client options](https://s00d.github.io/onlinesim-dotnet-api/#client-options); `Transport` is ignored. To build the client yourself, set `mock.Transport` as the transport; any `BaseUrl` works:
+
+```csharp
+using OnlineSim.Api;
+
+var mock = new MockOnlineSim();
+var client = new OnlineSimClient(new OnlineSimClientOptions { ApiKey = "mock-key", Transport = mock.Transport });
+```
+
+## A full example
+
+Order a number, let an SMS arrive while `WaitCodeAsync` polls, check the code and the money. `AddSmsAfter` delivers the SMS after a number of polls instead of after some time, so `WaitCodeAsync` runs with a zero interval and the test takes milliseconds. xUnit here; any test framework works the same.
+
+```csharp
+using System;
+using System.Threading.Tasks;
+using OnlineSim.Api;
+using Xunit;
+
+public class OnlineSimTests
+{
+    [Fact]
+    public async Task ReceivesTheCode()
+    {
+        var mock = new MockOnlineSim(new MockOptions { Balance = 10 });
+        var client = mock.Client();
+
+        var order = await client.Numbers.GetWithNumberAsync("google", 44);
+        Assert.Equal("+44900000001", order.Number);
+
+        mock.AddSmsAfter(order.Tzid, "Your Google code: 123-456", 2); // the third poll sees it
+        var code = await client.Numbers.WaitCodeAsync(order.Tzid, new WaitCodeOptions { Interval = TimeSpan.Zero });
+
+        Assert.Equal("123456", code);
+        Assert.Equal("TZ_OVER_OK", mock.Operations()[0].Status); // WaitCodeAsync closed it
+        Assert.Equal(9.8m, mock.Balance()); // the price is spent once an SMS arrived
+    }
+}
+```
+
+The `Msg` of an operation is the code by default: the first run of 4–8 digits, with spaces and dashes between digits removed (`123-456` → `123456`); a text without such a run comes back whole. `messageToCode: false` (or `FullMessage` in `WaitCodeOptions`) gives the full text.
+
+## Errors
+
+`FailNext(code)` makes the next request answer `{"response": code}` — the client turns it into `ApiException` (or `NoNumberException`) exactly as for the real server. Pass `endpoint` to fail only that endpoint. `FailNextTransport()` makes the next request fail with a non-JSON HTTP 502 (`TransportException`).
+
+```csharp
+using System.Threading.Tasks;
+using OnlineSim.Api;
+using Xunit;
+
+public class ErrorTests
+{
+    [Fact]
+    public async Task HandlesAMissingNumberAndANetworkHiccup()
+    {
+        var mock = new MockOnlineSim();
+        var client = mock.Client();
+
+        mock.FailNext("NO_NUMBER", endpoint: "getNum.php");
+        await Assert.ThrowsAsync<NoNumberException>(() => client.Numbers.GetAsync("google"));
+
+        mock.FailNextTransport(503);
+        await Assert.ThrowsAsync<TransportException>(() => client.User.BalanceAsync());
+
+        Assert.Equal(100m, (await client.User.BalanceAsync()).Balance); // one-shot
+    }
+}
+```
+
+The state itself produces the real error codes too: `WARNING_LOW_BALANCE` when the balance is short, `NO_NUMBER` when `reject` matches the next number, `UNDEFINED_COUNTRY` / `ERROR_NO_SERVICE` for unknown prices, `ERROR_WRONG_TZID` for an unknown or closed operation (`NextAsync` too; `ERROR_NO_TZID` for tzid `0`), `UNDEFINED_COUNTRY` / `UNDEFINED_DAYS` for an unknown rent country or period, `TRY_AGAIN_LATER` for every refused `Rent.ExtendAsync`, `ERROR_NO_OPERATIONS` for an unknown rent in `Rent.CloseAsync`, `ERROR_WRONG_KEY` for a wrong key (HTTP 456) or no key (HTTP 200).
+
+## Inspecting requests
+
+`mock.Requests` lists every request received: `Method`, `Path` (relative to `/api/`), `Query` (decoded), `Body` (the JSON of a POST).
+
+```csharp
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using OnlineSim.Api;
+using Xunit;
+
+public class RequestTests
+{
+    [Fact]
+    public async Task SendsRejectAsACommaList()
+    {
+        var mock = new MockOnlineSim();
+        await mock.Client().Numbers.GetAsync("google", 44, reject: new[] { "4470", "4471" });
+
+        var request = Assert.Single(mock.Requests);
+        Assert.Equal(("GET", "getNum.php"), (request.Method, request.Path));
+        Assert.Equal(new Dictionary<string, string> { ["service"] = "google", ["country"] = "44", ["reject"] = "4470,4471", ["lang"] = "en" }, request.Query);
+    }
+}
+```
+
+## Control API
+
+| Member                                       | Description                                                                                                                               |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `Client(options?)`                           | A normal `OnlineSimClient` wired to the mock.                                                                                             |
+| `Transport`                                  | The fake `ITransport` (the mock itself).                                                                                                  |
+| `AddSms(tzid, text, service?)`               | An SMS arrives now at a number operation or a rent (detected by `tzid`). Throws `InvalidOperationException` for an unknown or closed one. |
+| `AddSmsAfter(tzid, text, polls, service?)`   | The SMS arrives after `polls` state requests for `tzid` (`Numbers.StateAsync`/`StateOneAsync`, `Rent.StateAsync`/`StateOneAsync`).        |
+| `FailNext(code, endpoint?)`                  | The next request (to `endpoint` only, e.g. `"getNum.php"`) answers `{"response": code}`.                                                  |
+| `FailNextTransport(status = 502, endpoint?)` | The next request fails with a non-JSON body and HTTP `status`.                                                                            |
+| `SetBalance(usd)` / `Balance()`              | Set / read the total balance, USD (it includes the part frozen by open operations, as `User.BalanceAsync()` reports it).                  |
+| `Operations()` / `Rents()`                   | Snapshots of the current number operations / open rents, for assertions.                                                                  |
+| `Requests`                                   | Log of the requests received (a copy).                                                                                                    |
+| `Reset()`                                    | Back to the constructor's state.                                                                                                          |
+
+## What the mock does
+
+- **Numbers**: `GetAsync` freezes the price; `CloseAsync` after an SMS spends it, without one refunds it; `BanAsync` after an SMS answers `"0"`, like the server. Numbers are `+<country>9000000NN`, ids count from 1. `NextAsync` switches to the following SMS. The operation's `Time` stays at 1200 s — there is no clock.
+- **Rent**: `GetAsync` reserves the price (`Status` `0`, `Checked` `false`) and keeps the `extension` flag; the first SMS that is not `notify` confirms the rent (`Status` `1`) and charges it — `AddSms(tzid, text, service: "notify")` adds a notice with `Code` `"0"` (the integer `0` on the wire) that confirms nothing. `ExtendAsync` works on a confirmed rent and charges at once. `CloseAsync` releases the reservation of an unconfirmed rent and gives no refund for a confirmed one. `sum` is a number in `GetAsync`/`ExtendAsync` and a decimal string on the wire of `StateAsync`, like the server. SMS appear in `Messages`, newest first.
+- **User**: `BalanceAsync` (frozen part included), a fixed profile, `SetWebhookUrlAsync` accepts any `scheme://…` URL (`VALIDATION_ERROR` otherwise), `WebhookLogsAsync` lists the deliveries the mock *recorded* when an SMS arrived while a webhook URL was set — it makes no HTTP call; their `Params` follow the real payload (`Code` `""` without a code, rent `Number` in digits without `+`, rent `TimeLeft` in minutes). `PaymentHistoryAsync` has no orders.
+- **Free**: `Free.ListAsync` returns two fixed countries (44 first) with one number and a few SMS each.
+- Not imitated: anything that needs real time — the 5 s lock after `setOperationOk` (`INTERVAL_CONCURRENT_REQUESTS_ERROR`), the 10 s lock of `Rent.ExtendAsync`, the 120 s before an unconfirmed rent may be closed and its 20-minute wait for the first SMS. `GuardInterval` above zero stands in for "too early to close".
+
+
+# User
+
+Every method also takes a `CancellationToken cancellationToken = default` as its last parameter.
+
+## BalanceAsync
+
+Balance in USD.
+
+```csharp
+Task<UserBalance> BalanceAsync()
+```
+
+`UserBalance`: `Balance`, `Zbalance`, `Income?` (all `decimal`). `Balance` includes the sum frozen by numbers and unconfirmed rents in progress (`Zbalance`, which may be negative): available = `Balance − max(Zbalance, 0)`. `Income` is the partner income. The server caches the answer for 60 s.
+
+```csharp
+var b = await client.User.BalanceAsync();
+decimal available = b.Balance - Math.Max(b.Zbalance, 0);
+```
+
+Errors: `ApiException` `ERROR_WRONG_KEY`, `ACCOUNT_BLOCKED`, `API_ACCESS_DISABLED`, `API_ACCESS_IP`.
+
+## ProfileAsync
+
+The account profile.
+
+```csharp
+Task<Profile> ProfileAsync()
+```
+
+`Profile`: `Id`, `Name`, `Username`, `Email`, `Locale`, `Currency`, `NumberCountry`, `NumberReject`, `WebhookUrl`, `ApiAccess`, … (`ApiAccess` and `NumberReject` arrive in several shapes and stay `JsonElement`).
+
+```csharp
+var profile = await client.User.ProfileAsync();
+Console.WriteLine($"{profile.Email} {profile.WebhookUrl}");
+```
+
+## PaymentHistoryAsync
+
+Top-up orders (paginated, newest first) and the available payment methods.
+
+```csharp
+Task<PaymentHistory> PaymentHistoryAsync(int page = 1)
+```
+
+`PaymentHistory`: `Orders` (`Paginator<PaymentOrder>`), `Paylist`, `Domains?`, `Forms?`, `Currency?`, `Buttons?`. `PaymentOrder.Sum` stays a decimal string (`"89.00"`); `Currency` and `FormText` may be `null`. `Paylist` maps a group id to its payment methods; when the server sends it as a JSON array (ids 0, 1, 2…) it is kept, keyed `"0"`, `"1"`, …; fields without a property are in `PaymentOrder.Extra`.
+
+```csharp
+var orders = (await client.User.PaymentHistoryAsync()).Orders;
+Console.WriteLine($"{orders.Total} orders, page {orders.CurrentPage}/{orders.LastPage}");
+```
+
+## SetWebhookUrlAsync
+
+Set the URL that receives SMS webhooks (see [Webhooks](https://s00d.github.io/onlinesim-dotnet-api/webhooks)).
+
+```csharp
+Task SetWebhookUrlAsync(string url)
+```
+
+```csharp
+await client.User.SetWebhookUrlAsync("https://example.com/onlinesim-hook");
+```
+
+Errors: `ApiException` `VALIDATION_ERROR` for an invalid URL; `Message` holds the server's field messages.
+
+## ClearWebhookUrlAsync
+
+Remove the webhook URL, also from operations in progress.
+
+```csharp
+Task ClearWebhookUrlAsync()
+```
+
+```csharp
+await client.User.ClearWebhookUrlAsync();
+```
+
+## WebhookLogsAsync
+
+Webhook delivery log, newest first, 10 per page.
+
+```csharp
+Task<Paginator<WebhookLog>> WebhookLogsAsync(int page = 1)
+```
+
+`WebhookLog`: `Id`, `UserId`, `WebhookUrl`, `Type`, `Params`, `Status`, `Error`, `CreatedAt`, `UpdatedAt` — `Type` is `receiving_sms` or `rent_sms`, `Status` is `success`, `fail` or `pending`, `Params` the payload that was sent (a `WebhookPayload`).
+
+```csharp
+var logs = await client.User.WebhookLogsAsync();
+foreach (var log in logs.Data) Console.WriteLine($"{log.CreatedAt} {log.Status} {log.Error}");
+```
+
+
+# Webhooks
+
+Set a URL with [`client.User.SetWebhookUrlAsync`](https://s00d.github.io/onlinesim-dotnet-api/user#setwebhookurlasync). For each SMS the server POSTs a JSON body to it: `webhook_type` `receiving_sms` for numbers, `rent_sms` for rents. Delivery attempts are listed by [`client.User.WebhookLogsAsync`](https://s00d.github.io/onlinesim-dotnet-api/user#webhooklogsasync).
+
+## Webhook.Parse
+
+Parse an inbound webhook body from a JSON string or an already parsed `JsonElement`.
+
+```csharp
+static WebhookPayload Parse(string payload)
+static WebhookPayload Parse(JsonElement payload)
+```
+
+Lenient: numeric fields may arrive as strings, missing or malformed fields become `null`, unknown fields are dropped. It throws `OnlineSimException` only when the input is not a JSON object.
+
+Any web framework works: pass it the raw request body. With the BCL's `HttpListener` (also on .NET Framework):
+
+```csharp
+using System.IO;
+using System.Net;
+using OnlineSim.Api;
+
+var listener = new HttpListener();
+listener.Prefixes.Add("http://+:8080/onlinesim-hook/");
+listener.Start();
+while (true)
+{
+    var context = await listener.GetContextAsync();
+    using (var reader = new StreamReader(context.Request.InputStream))
+    {
+        var hook = Webhook.Parse(await reader.ReadToEndAsync());
+        if (hook.WebhookType == Webhook.ReceivingSms) Console.WriteLine($"{hook.OperationId} {hook.Code}");
+    }
+    context.Response.Close();
+}
+```
+
+## Payload fields
+
+`WebhookPayload`:
+
+| Property      | Type      | Description                                                                                                                  |
+| ------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `WebhookType` | `string?` | `Webhook.ReceivingSms`, `Webhook.RentSms`, or `null`.                                                                        |
+| `OperationId` | `long?`   | `tzid` of the operation or rent.                                                                                             |
+| `UserId`      | `long?`   | Account id.                                                                                                                  |
+| `CountryCode` | `int?`    | Country code of the number.                                                                                                  |
+| `Number`      | `string?` | Numbers: `+` and the full number (`+79001234567`), or `hidden`. Rent: the full number in digits without `+` (`79001234567`). |
+| `Sender`      | `string?` | Sender of the SMS, e.g. `VK`.                                                                                                |
+| `Message`     | `string?` | Full SMS text.                                                                                                               |
+| `Code`        | `string?` | Code extracted from the SMS; `""` when none was found.                                                                       |
+| `TimeStart`   | `string?` | Numbers: when the operation was ordered. Rent: when the SMS arrived. `YYYY-MM-DD HH:MM:SS`.                                  |
+| `TimeLeft`    | `long?`   | Time left: seconds for numbers, minutes for rent.                                                                            |

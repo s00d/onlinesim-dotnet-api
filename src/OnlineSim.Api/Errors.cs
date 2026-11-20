@@ -13,7 +13,7 @@ public class OnlineSimException : Exception
     public OnlineSimException(string message, Exception? innerException) : base(message, innerException) { }
 }
 
-/// <summary>The API answered with an error code in <c>response</c> (also a wrong key, HTTP 456).</summary>
+/// <summary>The API answered with an error code in <c>response</c> (also a wrong key, HTTP 456, and the rate limit, HTTP 429).</summary>
 public class ApiException : OnlineSimException
 {
     /// <summary>Creates the exception. <paramref name="message"/> falls back to <see cref="ErrorMessages"/>, then to the code.</summary>
@@ -32,7 +32,7 @@ public class ApiException : OnlineSimException
     }
 }
 
-/// <summary>No number is available right now (<c>NO_NUMBER</c>, <c>NO_NUMBER_FOR_FORWARD</c>). Retry later or pick another country.</summary>
+/// <summary>No number is available right now (<c>NO_NUMBER</c>). Retry later or pick another country.</summary>
 public sealed class NoNumberException : ApiException
 {
     /// <summary>Creates the exception.</summary>
@@ -71,29 +71,30 @@ public static class ErrorMessages
     public static IReadOnlyDictionary<string, string> All { get; } = new Dictionary<string, string>
     {
         ["ACCOUNT_BLOCKED"] = "Account is blocked",
-        ["ERROR_WRONG_KEY"] = "Wrong API key",
-        ["ERROR_NO_KEY"] = "API key is missing",
+        ["ACCOUNT_CLEANED"] = "Account was deleted",
+        ["USER_NOT_ACTIVATED"] = "Account email is not confirmed",
+        ["ERROR_WRONG_KEY"] = "Wrong or missing API key",
         ["ERROR_NO_SERVICE"] = "Service is not specified",
         ["API_ACCESS_DISABLED"] = "API access is disabled in the profile",
         ["API_ACCESS_IP"] = "API access from this IP is not allowed in the profile",
         ["ERROR_NO_TZID"] = "tzid is not specified",
         ["ERROR_WRONG_TZID"] = "Wrong tzid",
         ["ERROR_NO_OPERATIONS"] = "No operations",
+        ["ERROR_UNDEFINED"] = "Unexpected server error, try again",
         ["NO_NUMBER"] = "No numbers available for this service right now",
-        ["NO_NUMBER_FOR_FORWARD"] = "No numbers available for forwarding",
         ["NO_COUNTRY"] = "Country not found",
         ["UNDEFINED_COUNTRY"] = "Unknown country",
         ["WARNING_LOW_BALANCE"] = "Not enough balance",
         ["EXCEEDED_CONCURRENT_OPERATIONS"] = "Too many concurrent operations for this account",
         ["INTERVAL_CONCURRENT_REQUESTS_ERROR"] = "Too many concurrent requests, try again in a few seconds",
-        ["TRY_AGAIN_LATER"] = "Temporarily unable to perform the request, try again later",
-        ["ACCOUNT_IDENTIFICATION_REQUIRED"] = "Account identification is required",
+        ["TRY_AGAIN_LATER"] = "Rate limit exceeded or temporary error, try again later",
+        ["FORWARD_NOT_SUPPORTED"] = "Number forwarding is no longer available",
         ["ERROR_PARAMS"] = "Wrong parameters",
-        ["API_DISABLED"] = "API is disabled",
         ["NO_COMPLETE_TZID"] = "The operation cannot be closed yet",
         ["NO_CLOSE_RENT_US"] = "US rent numbers cannot be closed early",
         ["UNDEFINED_DAYS"] = "Unknown rent period",
         ["VALIDATION_ERROR"] = "Validation failed",
+        ["0"] = "Ban not applied: the operation already has an SMS",
         ["TZ_OVER_OK"] = "Operation finished without a new code",
         ["ERROR_NO_ITEMS"] = "Operation failed",
     };

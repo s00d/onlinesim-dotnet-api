@@ -22,7 +22,7 @@ var client = mock.Client(); // an OnlineSimClient wired to the mock
 | `Balance` | `100` | Starting balance, USD (`decimal`). |
 | `Prices` | `{7: {vkcom: 0.5, telegram: 1.2, google: 0.3}, 44: {google: 0.2, vkcom: 0.36}}` | Number prices, `Dictionary<int, Dictionary<string, decimal>>` (country → service → USD); replaces the defaults. Also feeds `Numbers.TariffsAsync()`. |
 | `RentTariffs` | `{7: {Days: {1: 1, 3: 2.5, 7: 5}, Extend: 1}}` | Rent prices, `Dictionary<int, MockRentTariff>`; `Extend = 0` makes rents of that country non-extendable. |
-| `GuardInterval` | `TimeSpan.Zero` | Above zero: an operation without SMS cannot be closed (`NO_COMPLETE_TZID`). |
+| `GuardInterval` | `TimeSpan.Zero` | Above zero: an operation without SMS, or an unconfirmed rent without any SMS, cannot be closed (`NO_COMPLETE_TZID`). |
 
 ```csharp
 using System.Collections.Generic;
@@ -105,7 +105,7 @@ public class ErrorTests
 }
 ```
 
-The state itself produces the real error codes too: `WARNING_LOW_BALANCE` when the balance is short, `NO_NUMBER` when `reject` matches the next number, `UNDEFINED_COUNTRY` / `ERROR_NO_SERVICE` for unknown prices, `ERROR_WRONG_TZID` for an unknown or closed operation, `TRY_AGAIN_LATER` when extending a non-extendable rent, `ERROR_WRONG_KEY` (HTTP 456) for a wrong key.
+The state itself produces the real error codes too: `WARNING_LOW_BALANCE` when the balance is short, `NO_NUMBER` when `reject` matches the next number, `UNDEFINED_COUNTRY` / `ERROR_NO_SERVICE` for unknown prices, `ERROR_WRONG_TZID` for an unknown or closed operation (`NextAsync` too; `ERROR_NO_TZID` for tzid `0`), `UNDEFINED_COUNTRY` / `UNDEFINED_DAYS` for an unknown rent country or period, `TRY_AGAIN_LATER` for every refused `Rent.ExtendAsync`, `ERROR_NO_OPERATIONS` for an unknown rent in `Rent.CloseAsync`, `ERROR_WRONG_KEY` for a wrong key (HTTP 456) or no key (HTTP 200).
 
 ## Inspecting requests
 
@@ -150,7 +150,7 @@ public class RequestTests
 ## What the mock does
 
 - **Numbers**: `GetAsync` freezes the price; `CloseAsync` after an SMS spends it, without one refunds it; `BanAsync` after an SMS answers `"0"`, like the server. Numbers are `+<country>9000000NN`, ids count from 1. `NextAsync` switches to the following SMS. The operation's `Time` stays at 1200 s — there is no clock.
-- **Rent**: `GetAsync` charges at once and keeps the `extension` flag; `ExtendAsync` charges again; `CloseAsync` removes the rent. SMS appear in `Messages`, newest first.
-- **User**: `BalanceAsync` (frozen part included), a fixed profile, `SetWebhookUrlAsync` validates `http(s)` URLs (`VALIDATION_ERROR` otherwise), `WebhookLogsAsync` lists the deliveries the mock *recorded* when an SMS arrived while a webhook URL was set — it makes no HTTP call. `PaymentHistoryAsync` is empty.
-- **Free**: `Free.ListAsync` returns two fixed countries with one number and a few SMS each.
-- Not imitated: the server's 5 s lock after `setOperationOk` (`INTERVAL_CONCURRENT_REQUESTS_ERROR`) and anything else that needs real time.
+- **Rent**: `GetAsync` reserves the price (`Status` `0`, `Checked` `false`) and keeps the `extension` flag; the first SMS that is not `notify` confirms the rent (`Status` `1`) and charges it — `AddSms(tzid, text, service: "notify")` adds a notice with `Code` `"0"` (the integer `0` on the wire) that confirms nothing. `ExtendAsync` works on a confirmed rent and charges at once. `CloseAsync` releases the reservation of an unconfirmed rent and gives no refund for a confirmed one. `sum` is a number in `GetAsync`/`ExtendAsync` and a decimal string on the wire of `StateAsync`, like the server. SMS appear in `Messages`, newest first.
+- **User**: `BalanceAsync` (frozen part included), a fixed profile, `SetWebhookUrlAsync` accepts any `scheme://…` URL (`VALIDATION_ERROR` otherwise), `WebhookLogsAsync` lists the deliveries the mock *recorded* when an SMS arrived while a webhook URL was set — it makes no HTTP call; their `Params` follow the real payload (`Code` `""` without a code, rent `Number` in digits without `+`, rent `TimeLeft` in minutes). `PaymentHistoryAsync` has no orders.
+- **Free**: `Free.ListAsync` returns two fixed countries (44 first) with one number and a few SMS each.
+- Not imitated: anything that needs real time — the 5 s lock after `setOperationOk` (`INTERVAL_CONCURRENT_REQUESTS_ERROR`), the 10 s lock of `Rent.ExtendAsync`, the 120 s before an unconfirmed rent may be closed and its 20-minute wait for the first SMS. `GuardInterval` above zero stands in for "too early to close".

@@ -157,10 +157,10 @@ public sealed class MockOnlineSim : ITransport
         }
 
         if (!MockHandlers.Routes.TryGetValue(req.Path, out var handler)) return Text(404, "Not Found");
-        if (!MockHandlers.PublicPaths.Contains(req.Path) && Authorization(request) != "Bearer " + _state.ApiKey)
-        {
-            return Json(new JsonObject { ["response"] = "ERROR_WRONG_KEY" }, 456);
-        }
+        // A wrong key is HTTP 456 (public endpoints check a sent key too); no key at all is HTTP 200.
+        var auth = Authorization(request);
+        if (auth != null && auth != "Bearer " + _state.ApiKey) return Json(new JsonObject { ["response"] = "ERROR_WRONG_KEY" }, 456);
+        if (auth == null && !MockHandlers.PublicPaths.Contains(req.Path)) return Json(new JsonObject { ["response"] = "ERROR_WRONG_KEY" });
         return Json(handler(_state, req));
     }
 

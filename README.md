@@ -16,7 +16,7 @@ using OnlineSim.Api;
 var client = new OnlineSimClient(Environment.GetEnvironmentVariable("ONLINESIM_KEY"));
 
 var balance = await client.User.BalanceAsync();
-Console.WriteLine($"available: {balance.Balance - balance.Zbalance} USD");
+Console.WriteLine($"available: {balance.Balance - Math.Max(balance.Zbalance, 0)} USD");
 
 var order = await client.Numbers.GetWithNumberAsync("google", 44);
 Console.WriteLine($"enter {order.Number} in the app");

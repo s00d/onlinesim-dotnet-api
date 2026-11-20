@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 
 namespace OnlineSim.Api.Tests;
@@ -33,6 +35,34 @@ public class UserTests
         Assert.Equal("333", p.NumberReject!.Value[0].GetString());
         Assert.Equal(JsonValueKind.True, p.ApiAccess!.Value.ValueKind);
         Assert.Null(p.ResetCount);
+    }
+
+    [Fact]
+    public async Task ProfileDecodesNumberAsIntOrNullAndCountryAsStringOrNull()
+    {
+        var (client, _) = Fake.Client(
+            Reply.Json("""{"response":"1","profile":{"id":1,"number":79001234567,"country":"RU"}}"""),
+            Reply.Json("""{"response":"1","profile":{"id":1,"number":null,"country":null}}"""),
+            Reply.Json("""{"response":"1","profile":{"id":1,"number":"79001234567","country":7}}"""));
+        var p = await client.User.ProfileAsync();
+        Assert.Equal(((long?)79001234567, "RU"), (p.Number, p.Country));
+        p = await client.User.ProfileAsync();
+        Assert.Equal(((long?)null, (string?)null), (p.Number, p.Country));
+        p = await client.User.ProfileAsync(); // lenient: a numeric string, a number
+        Assert.Equal(((long?)79001234567, "7"), (p.Number, p.Country));
+    }
+
+    [Fact]
+    public async Task PaymentHistoryKeepsAPaylistThatArrivesAsAJsonArrayNullableOrderFields()
+    {
+        var body = JsonNode.Parse(Fake.Fixture("getPaymentHistory"))!.AsObject();
+        body["paylist"] = JsonNode.Parse("""[{"id":0,"name":"Card"},{"id":1,"name":"Crypto"}]""");
+        body["orders"]!["data"] = JsonNode.Parse("""[{"id":1,"sum":"10.00","currency":null,"form_text":null,"stat":0,"created_at":"2026-06-14 09:12:12"}]""");
+        var (client, _) = Fake.Client(Reply.Json(body.ToJsonString()));
+        var h = await client.User.PaymentHistoryAsync();
+        Assert.Equal(new[] { "0", "1" }, h.Paylist.Keys.OrderBy(k => k));
+        Assert.Equal("Crypto", h.Paylist["1"].GetProperty("name").GetString());
+        Assert.Equal(((string?)null, (string?)null), (h.Orders.Data[0].Currency, h.Orders.Data[0].FormText));
     }
 
     [Fact]

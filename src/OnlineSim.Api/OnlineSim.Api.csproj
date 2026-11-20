@@ -8,7 +8,7 @@
 
     <!-- Package -->
     <PackageId>OnlineSim.Api</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>s00d</Authors>
     <Description>Typed async client for the OnlineSim API (SMS numbers, rent, account, free numbers) with a built-in offline MockOnlineSim for tests. netstandard2.0 and net8.0: .NET Framework 4.6.2+, .NET 6/8/9+, Unity/Mono.</Description>
     <PackageTags>onlinesim;sms;sms-verification;virtual-number;otp;api-client;sdk</PackageTags>

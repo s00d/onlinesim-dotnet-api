@@ -31,6 +31,27 @@ public class RentTests
     }
 
     [Fact]
+    public async Task DecodesTheSpecShapesSumNumberOrStringCode0ForANotifySms()
+    {
+        var item = List()[0]!.AsObject();
+        item["status"] = 0;
+        item["checked"] = false;
+        item["sum"] = 1.5m;
+        item["messages"] = JsonNode.Parse("""
+            [{"id":2,"service":"notify","text":"Messages from this sender are not accepted","code":0,"created_at":"2026-11-19 10:01:12"},
+             {"id":1,"service":"Google","text":"G-070051","code":"070051","created_at":"2026-11-19 10:01:00"}]
+            """);
+        var got = $$"""{"response":1,"item":{{item.ToJsonString()}}}""";
+        item["sum"] = "2.40";
+        var listed = $$"""{"response":1,"list":[{{item.ToJsonString()}}]}""";
+        var (client, _) = Fake.Client(Reply.Json(got), Reply.Json(listed));
+        var rent = await client.Rent.GetAsync(7, 3);
+        Assert.Equal((0, (bool?)false, 1.5m), (rent.Status, rent.Checked, rent.Sum));
+        Assert.Equal(new[] { "0", "070051" }, rent.Messages.Select(m => m.Code)); // the integer 0 is normalised to "0"
+        Assert.Equal(2.4m, (await client.Rent.StateOneAsync(rent.Tzid)).Sum);
+    }
+
+    [Fact]
     public async Task GetWithExtensionFalseSendsExtension0()
     {
         var (client, fake) = Fake.Client(Reply.Json(Item(1)));

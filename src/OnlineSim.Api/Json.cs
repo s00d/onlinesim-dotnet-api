@@ -9,8 +9,8 @@ namespace OnlineSim.Api;
 /// <summary>
 /// JSON reading shared by the sections and <see cref="Webhook"/>. Models keep the server's field names
 /// (snake_case on the wire, PascalCase in C#) with the client-side normalisations of the contract:
-/// decimal-string money becomes a number, maps sent as an empty PHP array <c>[]</c> become empty maps,
-/// and nullable numbers are lenient (a number, a numeric string, otherwise <c>null</c>).
+/// decimal-string money becomes a number, maps sent as a PHP list (<c>[]</c>, or <c>[a, b]</c> when the keys are
+/// 0..n) become index-keyed maps, and nullable numbers are lenient (a number, a numeric string, otherwise <c>null</c>).
 /// </summary>
 internal static class Json
 {
@@ -92,7 +92,10 @@ internal static class Json
         }
     }
 
-    /// <summary>Maps (<see cref="IReadOnlyDictionary{TKey, TValue}"/>): PHP sends an empty one as <c>[]</c>, read it as empty.</summary>
+    /// <summary>
+    /// Maps (<see cref="IReadOnlyDictionary{TKey, TValue}"/>): PHP sends a map whose keys are 0..n as a JSON array
+    /// (an empty one as <c>[]</c>); read it as the map it is, keyed by index.
+    /// </summary>
     private sealed class LenientMapConverterFactory : JsonConverterFactory
     {
         public override bool CanConvert(Type typeToConvert) =>
@@ -111,8 +114,10 @@ internal static class Json
         {
             if (reader.TokenType == JsonTokenType.StartArray)
             {
-                reader.Skip();
-                return new Dictionary<TKey, TValue>();
+                var items = JsonSerializer.Deserialize<List<TValue>>(ref reader, options)!;
+                var map = new Dictionary<TKey, TValue>();
+                for (var i = 0; i < items.Count; i++) map[(TKey)Convert.ChangeType(i, typeof(TKey), CultureInfo.InvariantCulture)] = items[i];
+                return map;
             }
             return JsonSerializer.Deserialize<Dictionary<TKey, TValue>>(ref reader, options) ?? new Dictionary<TKey, TValue>();
         }
@@ -126,6 +131,27 @@ internal static class Json
             foreach (var pair in value) copy[pair.Key] = pair.Value;
             return copy;
         }
+    }
+}
+
+/// <summary>
+/// A string field the server may also send as a number: the number becomes its JSON text (rent SMS <c>code</c> is
+/// the integer <c>0</c> for a <c>notify</c> SMS → <c>"0"</c>). Booleans likewise; objects and arrays read as <c>null</c>.
+/// </summary>
+internal sealed class LenientStringConverter : JsonConverter<string?>
+{
+    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String) return reader.GetString();
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var kind = doc.RootElement.ValueKind;
+        return kind == JsonValueKind.Number || kind == JsonValueKind.True || kind == JsonValueKind.False ? doc.RootElement.GetRawText() : null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options)
+    {
+        if (value == null) writer.WriteNullValue();
+        else writer.WriteStringValue(value);
     }
 }
 

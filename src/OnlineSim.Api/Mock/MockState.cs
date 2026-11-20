@@ -21,6 +21,12 @@ internal sealed class MockState
     /// <summary>Seconds an operation stays open, as reported in <c>time</c>. The mock has no clock, so it never runs down.</summary>
     internal const int OperationTime = 1200;
 
+    /// <summary>Minutes an unconfirmed rent waits for its first SMS (<c>stop_time</c> = start + this).</summary>
+    internal const int RentFirstSmsMinutes = 20;
+
+    /// <summary>Sender of a rent SMS from a prohibited sender: it gets the integer <c>code</c> <c>0</c> and does not confirm the rent.</summary>
+    internal const string Notify = "notify";
+
     private static readonly DateTime Epoch = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     private static readonly Regex DigitGap = new Regex(@"([0-9])[\s-]+(?=[0-9])", RegexOptions.CultureInvariant);
     private static readonly Regex CodeRun = new Regex(@"(?<![0-9])[0-9]{4,8}(?![0-9])", RegexOptions.CultureInvariant);
@@ -55,7 +61,7 @@ internal sealed class MockState
     /// <summary>Total balance incl. the frozen part, mills.</summary>
     internal long Balance { get; set; }
 
-    /// <summary>Frozen by open operations, mills.</summary>
+    /// <summary>Frozen by open operations and unconfirmed rents, mills.</summary>
     internal long Frozen { get; set; }
 
     /// <summary>Keyed by tzid; ids only grow, so the sorted order is the creation order.</summary>
@@ -138,7 +144,8 @@ internal sealed class MockState
             var sms = new MockSms(service ?? op.Service, text, code);
             op.Messages.Add(sms);
             op.Status = OperationStatus.NumAnswer;
-            RecordWebhook(Webhook.ReceivingSms, tzid, op.Country, op.Number, sms);
+            // Activation: `+<digits>`, seconds left, the order time.
+            RecordWebhook(Webhook.ReceivingSms, tzid, op.Country, op.Number, sms, OperationTime, Stamp(op.Tzid));
             return true;
         }
         if (Rents.TryGetValue(tzid, out var rent))
@@ -146,7 +153,18 @@ internal sealed class MockState
             var id = NextId();
             var sms = new MockRentSms(service ?? "other", text, code, id, Stamp(id));
             rent.Messages.Add(sms);
-            RecordWebhook(Webhook.RentSms, tzid, rent.Country, rent.Number, sms);
+            if (rent.Status == 0 && sms.Service != Notify)
+            {
+                // The first real SMS confirms the rent: the reservation is charged.
+                var cost = ToMills(rent.Sum);
+                Frozen -= cost;
+                Balance -= cost;
+                rent.Status = 1;
+            }
+            // Rent: full number in digits without `+`, minutes left, the SMS time.
+            var minutesLeft = rent.Status == 1 ? rent.Days * 24 * 60 : RentFirstSmsMinutes;
+            var fullNumber = rent.Country.ToString(CultureInfo.InvariantCulture) + rent.Number;
+            RecordWebhook(Webhook.RentSms, tzid, rent.Country, fullNumber, sms, minutesLeft, Stamp(id));
             return true;
         }
         return false;
@@ -172,10 +190,10 @@ internal sealed class MockState
     }
 
     /// <summary>No HTTP call: the mock only records what the backend would have sent.</summary>
-    private void RecordWebhook(string type, long tzid, int country, string number, MockSms sms)
+    private void RecordWebhook(string type, long tzid, int country, string number, MockSms sms, long timeLeft, string timeStart)
     {
         if (WebhookUrl == null) return;
-        WebhookLogs.Add(new WebhookLogEntry(WebhookLogs.Count + 1, WebhookUrl, type, tzid, country, number, sms, Stamp(Seq)));
+        WebhookLogs.Add(new WebhookLogEntry(WebhookLogs.Count + 1, WebhookUrl, type, tzid, country, number, sms, Stamp(Seq), timeLeft, timeStart));
     }
 }
 
@@ -217,6 +235,7 @@ internal sealed class RentState
         Country = country;
         Number = number;
         Days = days;
+        InitialDays = days;
         Sum = sum;
         Extension = extension;
     }
@@ -227,15 +246,23 @@ internal sealed class RentState
 
     internal string Number { get; }
 
+    /// <summary>Total rent days: the initial period plus extensions.</summary>
     internal int Days { get; set; }
 
+    /// <summary>The initial period (<c>days</c> of getRentNum).</summary>
+    internal int InitialDays { get; }
+
+    /// <summary><c>0</c>: reserved, waiting for the first SMS; <c>1</c>: confirmed, price charged.</summary>
+    internal int Status { get; set; }
+
+    /// <summary>Total cost incl. extensions, USD. Frozen while <see cref="Status"/> is 0.</summary>
     internal decimal Sum { get; set; }
 
     internal bool Extension { get; }
 
     internal List<MockRentSms> Messages { get; } = new List<MockRentSms>();
 
-    internal MockRent Snapshot() => new MockRent(Tzid, Country, Number, Days, Sum, Extension, Messages.ToArray());
+    internal MockRent Snapshot() => new MockRent(Tzid, Country, Number, Days, InitialDays, Status, Sum, Extension, Messages.ToArray());
 }
 
 /// <summary>A queued failure: the next matching request answers <c>{"response": Code}</c>, or a non-JSON HTTP <c>Status</c>.</summary>
@@ -274,8 +301,10 @@ internal sealed class ScheduledSms
 
 internal sealed class WebhookLogEntry
 {
-    internal WebhookLogEntry(long id, string url, string type, long tzid, int country, string number, MockSms sms, string time)
+    internal WebhookLogEntry(long id, string url, string type, long tzid, int country, string number, MockSms sms, string time, long timeLeft, string timeStart)
     {
+        TimeLeft = timeLeft;
+        TimeStart = timeStart;
         Id = id;
         Url = url;
         Type = type;
@@ -300,5 +329,12 @@ internal sealed class WebhookLogEntry
 
     internal MockSms Sms { get; }
 
+    /// <summary>When the log was written (the SMS time).</summary>
     internal string Time { get; }
+
+    /// <summary>Activations: seconds; rent: minutes.</summary>
+    internal long TimeLeft { get; }
+
+    /// <summary>Activations: the order time; rent: the SMS time.</summary>
+    internal string TimeStart { get; }
 }

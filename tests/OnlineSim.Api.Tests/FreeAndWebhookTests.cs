@@ -19,6 +19,14 @@ public class FreeTests
     }
 
     [Fact]
+    public async Task ListAcceptsNullCountryTextAndCountryOriginal()
+    {
+        var (client, _) = Fake.Client(Reply.Json("""{"response":1,"countries":[{"country":999,"country_text":null,"country_original":null}],"numbers":[],"messages":{"data":[]}}"""));
+        var c = (await client.Free.ListAsync()).Countries[0];
+        Assert.Equal((999, (string?)null, (string?)null), (c.Country, c.CountryText, c.CountryOriginal));
+    }
+
+    [Fact]
     public async Task ListNormalisesEmptyNumbers()
     {
         var (client, fake) = Fake.Client(Reply.Json("""{"response":1,"countries":[],"numbers":[],"messages":{"data":[]}}"""));

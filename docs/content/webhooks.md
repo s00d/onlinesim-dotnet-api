@@ -50,9 +50,9 @@ while (true)
 | `OperationId` | `long?` | `tzid` of the operation or rent. |
 | `UserId` | `long?` | Account id. |
 | `CountryCode` | `int?` | Country code of the number. |
-| `Number` | `string?` | The number, e.g. `+79001234567`. |
+| `Number` | `string?` | Numbers: `+` and the full number (`+79001234567`), or `hidden`. Rent: the full number in digits without `+` (`79001234567`). |
 | `Sender` | `string?` | Sender of the SMS, e.g. `VK`. |
 | `Message` | `string?` | Full SMS text. |
-| `Code` | `string?` | Code extracted from the SMS. |
-| `TimeStart` | `string?` | Start of the operation. |
-| `TimeLeft` | `long?` | Time left. |
+| `Code` | `string?` | Code extracted from the SMS; `""` when none was found. |
+| `TimeStart` | `string?` | Numbers: when the operation was ordered. Rent: when the SMS arrived. `YYYY-MM-DD HH:MM:SS`. |
+| `TimeLeft` | `long?` | Time left: seconds for numbers, minutes for rent. |

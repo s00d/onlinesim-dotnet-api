@@ -132,6 +132,30 @@ public class NumbersTests
     }
 
     [Fact]
+    public async Task BanAfterAnSmsAnswers0WhichIsAnApiExceptionWithAReadableMessage()
+    {
+        var (client, _) = Fake.Client(Reply.Json("""{"response":"0"}"""));
+        var e = await Assert.ThrowsAsync<ApiException>(() => client.Numbers.BanAsync(1520));
+        Assert.Equal(("0", "Ban not applied: the operation already has an SMS"), (e.Code, e.Message));
+    }
+
+    [Fact]
+    public async Task NextAcceptsTheStringTzidAnswerErrorWrongTzidForAForeignTzid()
+    {
+        var (client, _) = Fake.Client(Reply.Json("""{"tzid":"1520","response":"1"}"""), Reply.Json("""{"response":"ERROR_WRONG_TZID"}"""));
+        await client.Numbers.NextAsync(1520);
+        Assert.Equal("ERROR_WRONG_TZID", (await Assert.ThrowsAsync<ApiException>(() => client.Numbers.NextAsync(1))).Code);
+    }
+
+    [Fact]
+    public async Task StateOneAcceptsAnOperationWithoutResponse()
+    {
+        var (client, _) = Fake.Client(Reply.Json("""[{"tzid":5,"country":7,"service":"vkcom","sum":0.5,"time":900,"form":"index"}]"""));
+        var op = await client.Numbers.StateOneAsync(5);
+        Assert.Equal((5L, (string?)null), (op.Tzid, op.Response));
+    }
+
+    [Fact]
     public async Task CloseSurfacesNoCompleteTzid()
     {
         var (client, _) = Fake.Client(Reply.Json("""{"response":"NO_COMPLETE_TZID"}"""));

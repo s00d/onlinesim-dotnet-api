@@ -7,10 +7,10 @@ namespace OnlineSim.Api;
 /// <summary>Balance, USD.</summary>
 public sealed class UserBalance
 {
-    /// <summary>Total balance. Includes <see cref="Zbalance"/>: available = Balance − Zbalance.</summary>
+    /// <summary>Total balance. Includes <see cref="Zbalance"/>: available = Balance − max(Zbalance, 0).</summary>
     public decimal Balance { get; init; }
 
-    /// <summary>Sum frozen by numbers in progress.</summary>
+    /// <summary>Sum frozen by numbers and rents in progress; may be negative.</summary>
     public decimal Zbalance { get; init; }
 
     /// <summary>Partner income, when sent.</summary>
@@ -59,11 +59,12 @@ public sealed class Profile
     /// <summary>Webhook URL.</summary>
     public string? WebhookUrl { get; init; }
 
-    /// <summary>Phone number.</summary>
-    public string? Number { get; init; }
+    /// <summary>Phone number (digits), <c>null</c> when not set.</summary>
+    public long? Number { get; init; }
 
-    /// <summary>Country.</summary>
-    public int? Country { get; init; }
+    /// <summary>Country, <c>null</c> when not set.</summary>
+    [JsonConverter(typeof(LenientStringConverter))]
+    public string? Country { get; init; }
 
     /// <summary>Region of numbers.</summary>
     public int? NumberRegion { get; init; }
@@ -158,13 +159,13 @@ public sealed class PaymentOrder
     /// <summary>Decimal string, e.g. <c>"89.00"</c>.</summary>
     public string Sum { get; init; } = "";
 
-    /// <summary>Currency.</summary>
-    public string Currency { get; init; } = "";
+    /// <summary>Currency; <c>null</c> when not set.</summary>
+    public string? Currency { get; init; }
 
     /// <summary>Status code.</summary>
     public int Stat { get; init; }
 
-    /// <summary>Payment form.</summary>
+    /// <summary>Payment form; <c>null</c> when not set.</summary>
     public string? FormText { get; init; }
 
     /// <summary>Status text.</summary>
@@ -184,7 +185,7 @@ public sealed class PaymentHistory
     /// <summary>Orders, newest first.</summary>
     public Paginator<PaymentOrder> Orders { get; init; } = new Paginator<PaymentOrder>();
 
-    /// <summary>Payment methods by list id; empty when none.</summary>
+    /// <summary>Payment methods by group id; empty when none. The server sends a JSON array when the ids are 0, 1, 2…: it is kept, keyed <c>"0"</c>, <c>"1"</c>, ….</summary>
     public IReadOnlyDictionary<string, JsonElement> Paylist { get; init; } = new Dictionary<string, JsonElement>();
 
     /// <summary>Payment domains.</summary>

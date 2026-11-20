@@ -12,7 +12,10 @@ public sealed class RentApi
 
     internal RentApi(RequestFn request) => _request = request;
 
-    /// <summary>Rent a number for <paramref name="days"/> days and charge the balance.</summary>
+    /// <summary>
+    /// Rent a number for <paramref name="days"/> days. The price is reserved (<see cref="UserBalance.Zbalance"/>) and the
+    /// rent starts with <see cref="RentItem.Status"/> 0; the first SMS that is not <c>notify</c> confirms it and charges the price.
+    /// </summary>
     /// <param name="country">Country code.</param>
     /// <param name="days">One of the tariff's <see cref="RentTariff.Days"/> keys.</param>
     /// <param name="extension"><c>false</c> makes the rent non-extendable for good.</param>
@@ -36,7 +39,11 @@ public sealed class RentApi
         return list[0];
     }
 
-    /// <summary>Extend a rent by <paramref name="days"/> days and charge the balance (only rents created with <c>extension: true</c>).</summary>
+    /// <summary>
+    /// Extend a confirmed rent by <paramref name="days"/> days and charge the balance at once (only rents created with
+    /// <c>extension: true</c>). Every refusal (unknown tzid, unconfirmed or closed rent, not extendable, days not offered,
+    /// a repeat within 10 s) is <see cref="ApiException"/> <c>TRY_AGAIN_LATER</c>; low balance <c>WARNING_LOW_BALANCE</c>.
+    /// </summary>
     public async Task<RentItem> ExtendAsync(long tzid, int days = 1, CancellationToken cancellationToken = default)
     {
         var query = Detail(new Query().Add("tzid", tzid).Add("days", days));
@@ -56,7 +63,11 @@ public sealed class RentApi
         return Json.Read<RentTariff>(res);
     }
 
-    /// <summary>Return the number before the rent period ends.</summary>
+    /// <summary>
+    /// Return the number before the rent period ends. Unknown tzid: <c>ERROR_NO_OPERATIONS</c>. An unconfirmed rent
+    /// (status 0) gives <c>NO_COMPLETE_TZID</c> during its first 120 s without any SMS; after that, or with only
+    /// <c>notify</c> SMS, it closes and the reservation is released. A confirmed rent closes without a refund; US numbers: <c>NO_CLOSE_RENT_US</c>.
+    /// </summary>
     public Task CloseAsync(long tzid, CancellationToken cancellationToken = default) =>
         _request("rent/closeRentNum.php", new Query().Add("tzid", tzid), null, cancellationToken);
 

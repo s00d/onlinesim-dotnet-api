@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace OnlineSim.Api;
 
@@ -8,13 +9,14 @@ public sealed class RentSms
     /// <summary>Message id.</summary>
     public long Id { get; init; }
 
-    /// <summary>Service.</summary>
+    /// <summary>Sender. <c>notify</c>: a notice about a prohibited sender (does not confirm the rent); <c>init</c>: record of a rent confirmed at once.</summary>
     public string Service { get; init; } = "";
 
     /// <summary>Full text.</summary>
     public string Text { get; init; } = "";
 
-    /// <summary>Code; empty when none was found.</summary>
+    /// <summary>Code; empty when none was found. A <c>notify</c> SMS carries the integer <c>0</c>, normalised to <c>"0"</c>.</summary>
+    [JsonConverter(typeof(LenientStringConverter))]
     public string Code { get; init; } = "";
 
     /// <summary>Arrival time, <c>YYYY-MM-DD HH:MM:SS</c>.</summary>
@@ -27,7 +29,7 @@ public sealed class RentItem
     /// <summary>Rent id.</summary>
     public long Tzid { get; init; }
 
-    /// <summary>Status.</summary>
+    /// <summary><c>0</c>: price reserved, waiting for the first SMS; <c>1</c>: confirmed by an SMS that is not <c>notify</c>, price charged.</summary>
     public int Status { get; init; }
 
     /// <summary>Number without the country code.</summary>
@@ -36,7 +38,7 @@ public sealed class RentItem
     /// <summary>Country code.</summary>
     public int Country { get; init; }
 
-    /// <summary>Price paid, USD (parsed from the server's decimal string).</summary>
+    /// <summary>Cost of the rent incl. extensions, USD (the server sends a number or a decimal string). Reserved while <see cref="Status"/> is 0, charged once confirmed.</summary>
     public decimal Sum { get; init; }
 
     /// <summary>Rent days.</summary>

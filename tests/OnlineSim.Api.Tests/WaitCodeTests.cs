@@ -110,8 +110,39 @@ public class WaitCodeTests
         Assert.Single(clock.Sleeps);
     }
 
+    [Theory]
+    [InlineData("TRY_AGAIN_LATER")]
+    [InlineData("ERROR_UNDEFINED")]
+    [InlineData("INTERVAL_CONCURRENT_REQUESTS_ERROR")]
+    public async Task RetriesATransientApiExceptionUntilTheCodeArrives(string code)
+    {
+        var (client, fake) = Fake.Client(Reply.Json($$"""{"response":"{{code}}"}""", code == "TRY_AGAIN_LATER" ? 429 : 200), State(msg: "42"), Ok);
+        var clock = new Clock();
+        Assert.Equal("42", await client.Numbers.WaitCodeAsync(7, clock.Options()));
+        Assert.Equal(new[] { "getState.php", "getState.php", "setOperationOk.php" }, Paths(fake));
+        Assert.Equal(new[] { TimeSpan.FromSeconds(5) }, clock.Sleeps);
+    }
+
     [Fact]
-    public async Task RaisesAnyApiExceptionAtOnce()
+    public async Task ARetryableApiExceptionStillEndsInWaitTimeoutExceptionAtTheDeadline()
+    {
+        var replies = Enumerable.Range(0, 10).Select(_ => Reply.Json("""{"response":"TRY_AGAIN_LATER"}""", 429)).ToArray();
+        var (client, fake) = Fake.Client(replies);
+        var clock = new Clock();
+        await Assert.ThrowsAsync<WaitTimeoutException>(() => client.Numbers.WaitCodeAsync(7, clock.Options(o => o.Timeout = TimeSpan.FromSeconds(10))));
+        Assert.Equal(3, fake.Calls.Count);
+        Assert.Equal(TimeSpan.FromSeconds(10), clock.Now);
+    }
+
+    [Fact]
+    public async Task AnOperationWithoutResponseKeepsPolling()
+    {
+        var (client, _) = Fake.Client(Reply.Json("""[{"tzid":7}]"""), State(msg: "77"), Ok);
+        Assert.Equal("77", await client.Numbers.WaitCodeAsync(7, new Clock().Options()));
+    }
+
+    [Fact]
+    public async Task RaisesAnyOtherApiExceptionAtOnce()
     {
         var (client, fake) = Fake.Client(Reply.Json("""{"response":"ERROR_NO_OPERATIONS"}"""));
         Assert.Equal("ERROR_NO_OPERATIONS", (await Assert.ThrowsAsync<ApiException>(() => client.Numbers.WaitCodeAsync(7, new Clock().Options()))).Code);

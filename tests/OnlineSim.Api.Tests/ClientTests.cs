@@ -73,10 +73,34 @@ public class ClientTests
     }
 
     [Fact]
-    public async Task MapsNoNumberForForwardToNoNumberException()
+    public async Task MapsHttp429TryAgainLaterToApiExceptionNotTransport()
     {
-        var (client, _) = Fake.Client(Reply.Json("""{"response":"NO_NUMBER_FOR_FORWARD"}"""));
-        await Assert.ThrowsAsync<NoNumberException>(() => client.Numbers.GetAsync("google"));
+        var (client, _) = Fake.Client(Reply.Json("""{"response":"TRY_AGAIN_LATER"}""", 429));
+        var e = await Assert.ThrowsAsync<ApiException>(() => client.Numbers.StateAsync());
+        Assert.Equal(("TRY_AGAIN_LATER", "Rate limit exceeded or temporary error, try again later"), (e.Code, e.Message));
+    }
+
+    [Fact]
+    public async Task MapsAMissingKeyHttp200ErrorWrongKeyToApiException()
+    {
+        var (client, fake) = Fake.Client(o => o.ApiKey = null, Reply.Json("""{"response":"ERROR_WRONG_KEY"}"""));
+        var e = await Assert.ThrowsAsync<ApiException>(() => client.User.BalanceAsync());
+        Assert.Equal(("ERROR_WRONG_KEY", "Wrong or missing API key"), (e.Code, e.Message));
+        Assert.False(fake.Last.Headers.ContainsKey("Authorization"));
+    }
+
+    [Theory]
+    [InlineData("FORWARD_NOT_SUPPORTED", "Number forwarding is no longer available")]
+    [InlineData("ACCOUNT_CLEANED", "Account was deleted")]
+    [InlineData("USER_NOT_ACTIVATED", "Account email is not confirmed")]
+    [InlineData("ERROR_UNDEFINED", "Unexpected server error, try again")]
+    [InlineData("NO_NUMBER_FOR_FORWARD", "NO_NUMBER_FOR_FORWARD")]
+    public async Task OnlyNoNumberIsNoNumberExceptionOtherCodesUseTheTable(string code, string message)
+    {
+        var (client, _) = Fake.Client(Reply.Json($$"""{"response":"{{code}}"}"""));
+        var e = await Assert.ThrowsAsync<ApiException>(() => client.Numbers.GetAsync("google"));
+        Assert.IsNotType<NoNumberException>(e);
+        Assert.Equal((code, message), (e.Code, e.Message));
     }
 
     [Fact]
@@ -85,7 +109,7 @@ public class ClientTests
         var (client, _) = Fake.Client(Reply.Json("""{"response":"ERROR_WRONG_KEY"}""", 456));
         var e = await Assert.ThrowsAsync<ApiException>(() => client.User.BalanceAsync());
         Assert.Equal("ERROR_WRONG_KEY", e.Code);
-        Assert.Equal("Wrong API key", e.Message);
+        Assert.Equal("Wrong or missing API key", e.Message);
     }
 
     [Fact]

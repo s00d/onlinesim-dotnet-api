@@ -31,7 +31,7 @@ using OnlineSim.Api;
 var client = new OnlineSimClient(Environment.GetEnvironmentVariable("ONLINESIM_KEY"));
 
 var balance = await client.User.BalanceAsync();
-Console.WriteLine($"available: {balance.Balance - balance.Zbalance} USD");
+Console.WriteLine($"available: {balance.Balance - Math.Max(balance.Zbalance, 0)} USD");
 
 var order = await client.Numbers.GetWithNumberAsync("google", 44);
 Console.WriteLine($"enter {order.Number} in the app");
@@ -82,7 +82,7 @@ var client = new OnlineSimClient(new OnlineSimClientOptions
 
 Sections: [`client.Numbers`](/numbers), [`client.Rent`](/rent), [`client.User`](/user), [`client.Free`](/free). Webhook bodies are parsed by the static [`Webhook.Parse`](/webhooks).
 
-Returned models keep the server's field names in PascalCase (`guard_interval_remaining_seconds` → `GuardIntervalRemainingSeconds`). Two things are normalised: money that the server sends as a decimal string (`balance`, rent `sum`) becomes a `decimal`, and maps that arrive as an empty PHP array `[]` become empty dictionaries. Times reported by the server stay plain numbers in the server's unit (seconds or minutes, documented per field); durations you pass in are `TimeSpan`.
+Returned models keep the server's field names in PascalCase (`guard_interval_remaining_seconds` → `GuardIntervalRemainingSeconds`). Two things are normalised: money that the server sends as a decimal string (`balance`, rent `sum` in `Rent.StateAsync`) becomes a `decimal`, and maps that arrive as a PHP list become dictionaries keyed by index (an empty `[]` becomes an empty dictionary; `PaymentHistory.Paylist` sent as `[a, b]` becomes `{"0": a, "1": b}`). Times reported by the server stay plain numbers in the server's unit (seconds or minutes, documented per field); durations you pass in are `TimeSpan`.
 
 ## Error handling
 
@@ -90,8 +90,8 @@ Every exception derives from `OnlineSimException`.
 
 | Class | When | Properties |
 |---|---|---|
-| `ApiException` | The API answered with an error code (also a wrong key, HTTP 456). | `Code`, `Message` |
-| `NoNumberException` | `NO_NUMBER` / `NO_NUMBER_FOR_FORWARD`: no number right now. Derives from `ApiException`. | `Code`, `Message` |
+| `ApiException` | The API answered with an error code (also a wrong key, HTTP 456, and the rate limit, HTTP 429 `TRY_AGAIN_LATER`). | `Code`, `Message` |
+| `NoNumberException` | `NO_NUMBER`: no number right now. Derives from `ApiException`. | `Code`, `Message` |
 | `TransportException` | Network error, request timeout, or a body that is not JSON. | `Status` (`null` without a response), `Body` (first 500 chars) |
 | `WaitTimeoutException` | `WaitCodeAsync` got no code within its `Timeout`. | — |
 

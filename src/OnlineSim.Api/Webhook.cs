@@ -20,7 +20,7 @@ public sealed class WebhookPayload
     /// <summary>Country code of the number.</summary>
     public int? CountryCode { get; init; }
 
-    /// <summary>The number, e.g. <c>+79001234567</c>.</summary>
+    /// <summary>Activations: <c>+</c> and the full number (e.g. <c>+79001234567</c>), or <c>hidden</c>; rent: the full number in digits without <c>+</c>.</summary>
     public string? Number { get; init; }
 
     /// <summary>Sender of the SMS, e.g. <c>VK</c>.</summary>
@@ -29,13 +29,13 @@ public sealed class WebhookPayload
     /// <summary>Full SMS text.</summary>
     public string? Message { get; init; }
 
-    /// <summary>Code extracted from the SMS.</summary>
+    /// <summary>Code extracted from the SMS; <c>""</c> when none.</summary>
     public string? Code { get; init; }
 
-    /// <summary>Start of the operation.</summary>
+    /// <summary>Activations: the order time; rent: the SMS time.</summary>
     public string? TimeStart { get; init; }
 
-    /// <summary>Time left.</summary>
+    /// <summary>Time left: seconds for activations, minutes for rent.</summary>
     public long? TimeLeft { get; init; }
 }
 

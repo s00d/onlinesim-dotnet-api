@@ -78,7 +78,7 @@ Task<IReadOnlyList<Operation>> StateAsync(bool messageToCode = true, SortOrder o
 | `msgList` | `bool` | `false` | All SMS in `MsgList` (`OperationSms`: `Service`, `Msg`) instead of `Msg`. |
 
 `Operation`: `Tzid`, `Response`, `Number?`, `Service?`, `Country?`, `Sum?`, `Time?` (seconds left), `Msg?`, `MsgList?`, `GuardIntervalRemainingSeconds?`, …
-`Response` is the state, one of the `OperationStatus` constants: `TZ_INPOOL` (number being assigned), `TZ_NUM_WAIT` (waiting for SMS), `TZ_NUM_ANSWER` (SMS arrived), `TZ_OVER_OK` (finished), `ERROR_NO_ITEMS` (failed). `Msg` is `null` until the first SMS. The server caches answers for a few seconds.
+`Response` is the state (`null` when no number could be issued), one of the `OperationStatus` constants: `TZ_INPOOL` (number being assigned), `TZ_NUM_WAIT` (waiting for SMS), `TZ_NUM_ANSWER` (SMS arrived), `TZ_OVER_OK` (finished), `ERROR_NO_ITEMS` (failed). `Msg` is `null` until the first SMS. The server caches answers for a few seconds.
 
 ```csharp
 foreach (var op in await client.Numbers.StateAsync(orderBy: SortOrder.Desc))
@@ -119,7 +119,7 @@ Task<string> WaitCodeAsync(long tzid, WaitCodeOptions? options = null)
 | `Since` | `string?` | `null` | Ignore this value (the previous code). |
 | `Delay`, `Now` | delegates | `Task.Delay`, a `Stopwatch` | Injectable for tests: `Func<TimeSpan, CancellationToken, Task>`, `Func<TimeSpan>`. |
 
-A transient `TransportException` is retried until the timeout; any `ApiException` is thrown at once.
+Transient errors are retried until the timeout: `TransportException`, and `ApiException` `TRY_AGAIN_LATER` (the HTTP 429 rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`. Any other `ApiException` is thrown at once.
 
 ```csharp
 var first = await client.Numbers.WaitCodeAsync(tzid, new WaitCodeOptions { KeepOpen = true });
@@ -139,6 +139,8 @@ Task NextAsync(long tzid)
 ```csharp
 await client.Numbers.NextAsync(tzid);
 ```
+
+Errors: `ApiException` `ERROR_WRONG_TZID` (not an operation of your account), `ERROR_NO_TZID`.
 
 ## CloseAsync
 
@@ -166,7 +168,7 @@ Task BanAsync(long tzid)
 await client.Numbers.BanAsync(tzid);
 ```
 
-Errors: as `CloseAsync`.
+Errors: as `CloseAsync`; `ApiException` with `Code` `"0"` when the operation already has an SMS — nothing is changed then.
 
 ## TariffsAsync
 

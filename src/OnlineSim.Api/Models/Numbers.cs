@@ -55,8 +55,8 @@ public sealed class Operation
     /// <summary>Operation id.</summary>
     public long Tzid { get; init; }
 
-    /// <summary>State, one of <see cref="OperationStatus"/>.</summary>
-    public string Response { get; init; } = "";
+    /// <summary>State, one of <see cref="OperationStatus"/>; <c>null</c> when no number could be issued.</summary>
+    public string? Response { get; init; }
 
     /// <summary>Full number with <c>+</c>.</summary>
     public string? Number { get; init; }

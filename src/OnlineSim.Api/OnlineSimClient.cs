@@ -152,7 +152,8 @@ public sealed class OnlineSimClient
             throw new TransportException($"HTTP {response.Status}: response is not JSON", response.Status, Excerpt(response.Body));
         }
 
-        // The body is checked before the status: a wrong key is HTTP 456 with {"response":"ERROR_WRONG_KEY"}.
+        // The body is checked before the status: a wrong key is HTTP 456 with {"response":"ERROR_WRONG_KEY"},
+        // the rate limit HTTP 429 with {"response":"TRY_AGAIN_LATER"}.
         if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("response", out var code))
         {
             Unwrap(data, code);
@@ -187,7 +188,7 @@ public sealed class OnlineSimClient
         // Debug backends echo the code as `message`; prefer the readable fallback then.
         string? message = null;
         if (data.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String && m.GetString() != error) message = m.GetString();
-        if (error == "NO_NUMBER" || error == "NO_NUMBER_FOR_FORWARD") throw new NoNumberException(error, message);
+        if (error == "NO_NUMBER") throw new NoNumberException(error, message);
         throw new ApiException(error, message);
     }
 

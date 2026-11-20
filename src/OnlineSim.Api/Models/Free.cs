@@ -8,11 +8,11 @@ public sealed class FreeCountry
     /// <summary>Country code.</summary>
     public int Country { get; init; }
 
-    /// <summary>Localised name.</summary>
-    public string CountryText { get; init; } = "";
+    /// <summary>Localised name; <c>null</c> when unknown.</summary>
+    public string? CountryText { get; init; }
 
-    /// <summary>Name (slug).</summary>
-    public string CountryOriginal { get; init; } = "";
+    /// <summary>Name (slug); <c>null</c> when unknown.</summary>
+    public string? CountryOriginal { get; init; }
 }
 
 /// <summary>A free number.</summary>
@@ -21,8 +21,8 @@ public sealed class FreeNumber
     /// <summary>Country code.</summary>
     public int Country { get; init; }
 
-    /// <summary>Country name (slug).</summary>
-    public string CountryOriginal { get; init; } = "";
+    /// <summary>Country name (slug); <c>null</c> when unknown.</summary>
+    public string? CountryOriginal { get; init; }
 
     /// <summary>Number with the country code, without <c>+</c>.</summary>
     public string FullNumber { get; init; } = "";

@@ -12,7 +12,7 @@ public sealed class UserApi
 
     internal UserApi(RequestFn request) => _request = request;
 
-    /// <summary>Balance in USD. <see cref="UserBalance.Balance"/> includes the frozen <see cref="UserBalance.Zbalance"/>: available = Balance − Zbalance.</summary>
+    /// <summary>Balance in USD. <see cref="UserBalance.Balance"/> includes the frozen <see cref="UserBalance.Zbalance"/>: available = Balance − max(Zbalance, 0).</summary>
     public async Task<UserBalance> BalanceAsync(CancellationToken cancellationToken = default)
     {
         var res = await _request("getBalance.php", new Query().Add("income", 1), null, cancellationToken).ConfigureAwait(false);

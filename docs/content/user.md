@@ -15,11 +15,11 @@ Balance in USD.
 Task<UserBalance> BalanceAsync()
 ```
 
-`UserBalance`: `Balance`, `Zbalance`, `Income?` (all `decimal`). `Balance` includes the sum frozen by numbers in progress (`Zbalance`): available = `Balance − Zbalance`. `Income` is the partner income. The server caches the answer for 60 s.
+`UserBalance`: `Balance`, `Zbalance`, `Income?` (all `decimal`). `Balance` includes the sum frozen by numbers and unconfirmed rents in progress (`Zbalance`, which may be negative): available = `Balance − max(Zbalance, 0)`. `Income` is the partner income. The server caches the answer for 60 s.
 
 ```csharp
 var b = await client.User.BalanceAsync();
-decimal available = b.Balance - b.Zbalance;
+decimal available = b.Balance - Math.Max(b.Zbalance, 0);
 ```
 
 Errors: `ApiException` `ERROR_WRONG_KEY`, `ACCOUNT_BLOCKED`, `API_ACCESS_DISABLED`, `API_ACCESS_IP`.
@@ -47,7 +47,7 @@ Top-up orders (paginated, newest first) and the available payment methods.
 Task<PaymentHistory> PaymentHistoryAsync(int page = 1)
 ```
 
-`PaymentHistory`: `Orders` (`Paginator<PaymentOrder>`), `Paylist`, `Domains?`, `Forms?`, `Currency?`, `Buttons?`. `PaymentOrder.Sum` stays a decimal string (`"89.00"`); fields without a property are in `PaymentOrder.Extra`.
+`PaymentHistory`: `Orders` (`Paginator<PaymentOrder>`), `Paylist`, `Domains?`, `Forms?`, `Currency?`, `Buttons?`. `PaymentOrder.Sum` stays a decimal string (`"89.00"`); `Currency` and `FormText` may be `null`. `Paylist` maps a group id to its payment methods; when the server sends it as a JSON array (ids 0, 1, 2…) it is kept, keyed `"0"`, `"1"`, …; fields without a property are in `PaymentOrder.Extra`.
 
 ```csharp
 var orders = (await client.User.PaymentHistoryAsync()).Orders;

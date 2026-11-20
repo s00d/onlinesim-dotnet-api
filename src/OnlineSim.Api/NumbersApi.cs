@@ -35,6 +35,9 @@ public sealed class WaitCodeOptions
 /// <summary>Numbers for receiving SMS: <c>client.Numbers</c>.</summary>
 public sealed class NumbersApi
 {
+    /// <summary>Error codes that mean "try again"; <see cref="WaitCodeAsync"/> retries them.</summary>
+    private static readonly HashSet<string> Retryable = new HashSet<string> { "TRY_AGAIN_LATER", "ERROR_UNDEFINED", "INTERVAL_CONCURRENT_REQUESTS_ERROR" };
+
     private readonly RequestFn _request;
 
     internal NumbersApi(RequestFn request) => _request = request;
@@ -104,7 +107,7 @@ public sealed class NumbersApi
         return list[0];
     }
 
-    /// <summary>Switch the operation to its next SMS and keep it open.</summary>
+    /// <summary>Switch the operation to its next SMS and keep it open. <c>ERROR_WRONG_TZID</c> for a tzid that is not yours.</summary>
     public Task NextAsync(long tzid, CancellationToken cancellationToken = default) =>
         _request("setOperationRevise.php", new Query().Add("tzid", tzid), null, cancellationToken);
 
@@ -112,7 +115,10 @@ public sealed class NumbersApi
     public Task CloseAsync(long tzid, CancellationToken cancellationToken = default) =>
         _request("setOperationOk.php", new Query().Add("tzid", tzid), null, cancellationToken);
 
-    /// <summary>Finish the operation and report the number as bad (only before any SMS arrived).</summary>
+    /// <summary>
+    /// Finish the operation and report the number as bad (only before any SMS arrived). After an SMS the server changes
+    /// nothing and answers <c>"0"</c>: <see cref="ApiException"/> with <see cref="ApiException.Code"/> <c>"0"</c>.
+    /// </summary>
     public Task BanAsync(long tzid, CancellationToken cancellationToken = default) =>
         _request("setOperationOk.php", new Query().Add("tzid", tzid).Add("ban", true), null, cancellationToken);
 
@@ -130,7 +136,9 @@ public sealed class NumbersApi
     /// <see cref="WaitCodeOptions.KeepOpen"/>) and return the code. A finished operation (<c>TZ_OVER_OK</c>,
     /// <c>ERROR_NO_ITEMS</c>) without a new code throws <see cref="ApiException"/> with that state as the code;
     /// running out of <see cref="WaitCodeOptions.Timeout"/> throws <see cref="WaitTimeoutException"/>.
-    /// <see cref="TransportException"/> is retried until the timeout; any <see cref="ApiException"/> is thrown at once.
+    /// <see cref="TransportException"/> and the transient <see cref="ApiException"/> codes <c>TRY_AGAIN_LATER</c>,
+    /// <c>ERROR_UNDEFINED</c> and <c>INTERVAL_CONCURRENT_REQUESTS_ERROR</c> are retried until the timeout; any other
+    /// <see cref="ApiException"/> is thrown at once.
     /// </summary>
     public async Task<string> WaitCodeAsync(long tzid, WaitCodeOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -151,6 +159,10 @@ public sealed class NumbersApi
             {
                 // transient: retried until the timeout
             }
+            catch (ApiException e) when (Retryable.Contains(e.Code))
+            {
+                // rate limit (HTTP 429), transient server error, too many concurrent requests: retried until the timeout
+            }
 
             if (op != null)
             {
@@ -160,7 +172,7 @@ public sealed class NumbersApi
                     await (options.KeepOpen ? NextAsync(tzid, cancellationToken) : CloseAsync(tzid, cancellationToken)).ConfigureAwait(false);
                     return code!;
                 }
-                if (op.Response == OperationStatus.OverOk || op.Response == OperationStatus.ErrorNoItems) throw new ApiException(op.Response);
+                if (op.Response == OperationStatus.OverOk || op.Response == OperationStatus.ErrorNoItems) throw new ApiException(op.Response!);
             }
 
             var left = deadline - now();

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace OnlineSim.Api;
 
@@ -60,6 +61,9 @@ internal static class MockHandlers
     /// <summary>USD with <paramref name="digits"/> decimals as a string, as the backend sends <c>balance</c> and rent <c>sum</c>.</summary>
     private static string Decimal(long mills, int digits = 3) =>
         MockState.FromMills(mills).ToString("F" + digits.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+
+    /// <summary><c>YYYY-MM-DDTHH:MM:SS.000000Z</c>, the ISO-8601 form getFreeList sends.</summary>
+    private static string Iso(long seconds) => MockState.Stamp(seconds).Replace(' ', 'T') + ".000000Z";
 
     private static (string Name, string Locale) CountryName(int code) =>
         CountryNames.TryGetValue(code, out var n) ? n : ("country_" + code.ToString(CultureInfo.InvariantCulture), "Country " + code.ToString(CultureInfo.InvariantCulture));
@@ -161,6 +165,9 @@ internal static class MockHandlers
             ["country"] = country,
             ["time"] = MockState.OperationTime,
             ["service"] = service,
+            ["title"] = service,
+            ["response_text"] = "Waiting for SMS",
+            ["guard_interval_remaining_seconds"] = state.GuardIntervalSeconds,
         };
     }
 
@@ -178,18 +185,20 @@ internal static class MockHandlers
     private static JsonNode SetOperationRevise(MockState state, MockRequest req)
     {
         var tzid = Int(req, "tzid", 0);
-        // Always succeeds, even for unknown tzids, like the backend.
-        if (state.Operations.TryGetValue(tzid, out var op) && op.Status != OperationStatus.OverOk)
+        if (tzid == 0) return Error("ERROR_NO_TZID");
+        if (!state.Operations.TryGetValue(tzid, out var op)) return Error("ERROR_WRONG_TZID");
+        if (op.Status != OperationStatus.OverOk)
         {
             op.Cursor = op.Messages.Count;
             op.Status = OperationStatus.NumWait;
         }
-        return new JsonObject { ["response"] = 1, ["tzid"] = tzid };
+        return new JsonObject { ["tzid"] = tzid.ToString(CultureInfo.InvariantCulture), ["response"] = "1" };
     }
 
     private static JsonNode SetOperationOk(MockState state, MockRequest req)
     {
         var tzid = Int(req, "tzid", 0);
+        if (tzid == 0) return Error("ERROR_NO_TZID");
         if (!state.Operations.TryGetValue(tzid, out var op) || op.Status == OperationStatus.OverOk) return Error("ERROR_WRONG_TZID");
         var received = op.Messages.Count > 0;
         if (Flag(req, "ban") && received) return new JsonObject { ["response"] = "0" };
@@ -253,56 +262,68 @@ internal static class MockHandlers
         return map;
     }
 
-    private static JsonObject RentItem(MockState state, RentState rent, MockRequest req)
+    /// <summary>
+    /// A rent as the backend sends it. <c>sum</c> is a number in getRentNum/extendRentState and a 2-decimal string in
+    /// getRentState (<paramref name="stringSum"/>). An unconfirmed rent (<c>status</c> 0) waits 20 minutes for its first SMS.
+    /// </summary>
+    private static JsonObject RentItem(MockState state, RentState rent, MockRequest req, bool stringSum = false)
     {
         state.RentTariffs.TryGetValue(rent.Country, out var tariff);
         var extendable = rent.Extension && tariff?.Extend == 1;
+        var confirmed = rent.Status == 1;
         var start = rent.Tzid;
+        var minutes = confirmed ? rent.Days * 24L * 60 : MockState.RentFirstSmsMinutes;
         var item = new JsonObject
         {
-            ["status"] = 1,
+            ["status"] = rent.Status,
             ["extension"] = rent.Extension ? 1 : 0,
             ["messages"] = Array(Enumerable.Reverse(rent.Messages).Select(m => (JsonNode?)new JsonObject
             {
                 ["id"] = m.Id,
                 ["service"] = m.Service,
                 ["text"] = m.Text,
-                ["code"] = m.Code ?? "",
+                // A notice about a prohibited sender carries the integer 0, other SMS a string ("" without a code).
+                ["code"] = m.Service == MockState.Notify ? (JsonNode)0 : m.Code ?? "",
                 ["created_at"] = m.CreatedAt,
             })),
             ["webhook_url"] = state.WebhookUrl,
-            ["sum"] = Decimal(MockState.ToMills(rent.Sum), 2),
+            ["sum"] = stringSum ? (JsonNode)Decimal(MockState.ToMills(rent.Sum), 2) : rent.Sum,
             ["country"] = rent.Country,
             ["start_time"] = MockState.Stamp(start),
-            ["stop_time"] = MockState.Stamp(start + rent.Days * 86_400L),
+            ["stop_time"] = MockState.Stamp(start + minutes * 60),
             ["checked_time"] = MockState.Stamp(start),
             ["number"] = rent.Number,
-            ["days_autoextend"] = 0,
-            ["rent"] = 1,
+            ["days_autoextend"] = rent.InitialDays,
+            ["rent"] = rent.Days,
             ["tzid"] = rent.Tzid,
-            ["time"] = rent.Days * 24 * 60,
-            ["days"] = rent.Days,
-            ["hours"] = rent.Days * 24,
+            ["time"] = minutes,
+            ["days"] = confirmed ? rent.Days : 0,
+            ["hours"] = confirmed ? rent.Days * 24 : 0,
             ["extend"] = extendable ? DaysMap(tariff!.Days) : new JsonArray(),
-            ["checked"] = true,
-            ["reload"] = null,
+            ["checked"] = confirmed,
+            ["reload"] = rent.Country == 7 ? 0 : null,
             ["day_extend"] = extendable && tariff!.Days.TryGetValue(1, out var day) ? day : 0m,
             ["m_ext"] = false,
             ["freeze"] = false,
         };
-        if (Has(req, "number")) item["time_seconds"] = rent.Days * 86_400L;
+        if (Has(req, "number"))
+        {
+            item["time_seconds"] = minutes * 60;
+            item["guard_interval_remaining_seconds"] = !confirmed && rent.Messages.Count == 0 ? state.GuardIntervalSeconds : 0;
+        }
         return item;
     }
 
     private static JsonNode GetRentNum(MockState state, MockRequest req)
     {
         var country = (int)Int(req, "country", 7);
-        if (!state.RentTariffs.TryGetValue(country, out var tariff)) return Error("NO_COUNTRY");
+        if (!state.RentTariffs.TryGetValue(country, out var tariff)) return Error("UNDEFINED_COUNTRY");
         var days = (int)Int(req, "days", 1);
         if (!tariff.Days.TryGetValue(days, out var price)) return Error("UNDEFINED_DAYS");
         if (state.Available < MockState.ToMills(price)) return Error("WARNING_LOW_BALANCE");
         var tzid = state.NextId();
-        state.Balance -= MockState.ToMills(price);
+        // Reserved, not charged: the first SMS that is not `notify` confirms the rent and charges it.
+        state.Frozen += MockState.ToMills(price);
         // `extension` defaults to 1 on the server; `0` makes the rent non-extendable for good.
         var rent = new RentState(tzid, country, MockState.ShortNumber(tzid), days, price, Str(req, "extension") != "0");
         state.Rents[tzid] = rent;
@@ -315,15 +336,16 @@ internal static class MockHandlers
             ? (state.Rents.TryGetValue(Int(req, "tzid", -1), out var one) ? new List<RentState> { one } : new List<RentState>())
             : state.Rents.Values.ToList();
         foreach (var rent in rents) state.Poll(rent.Tzid);
-        return new JsonObject { ["response"] = 1, ["list"] = Array(rents.Select(r => (JsonNode?)RentItem(state, r, req))) };
+        return new JsonObject { ["response"] = 1, ["list"] = Array(rents.Select(r => (JsonNode?)RentItem(state, r, req, stringSum: true))) };
     }
 
     private static JsonNode ExtendRentState(MockState state, MockRequest req)
     {
-        if (!state.Rents.TryGetValue(Int(req, "tzid", 0), out var rent)) return Error("ERROR_WRONG_TZID");
-        if (!rent.Extension || !state.RentTariffs.TryGetValue(rent.Country, out var tariff) || tariff.Extend != 1) return Error("TRY_AGAIN_LATER");
+        // Every refusal is TRY_AGAIN_LATER, like the backend: unknown tzid, unconfirmed rent, not extendable, unknown days.
+        if (!state.Rents.TryGetValue(Int(req, "tzid", 0), out var rent) || rent.Status != 1 || !rent.Extension ||
+            !state.RentTariffs.TryGetValue(rent.Country, out var tariff) || tariff.Extend != 1) return Error("TRY_AGAIN_LATER");
         var days = (int)Int(req, "days", 1);
-        if (!tariff.Days.TryGetValue(days, out var price)) return Error("UNDEFINED_DAYS");
+        if (!tariff.Days.TryGetValue(days, out var price)) return Error("TRY_AGAIN_LATER");
         if (state.Available < MockState.ToMills(price)) return Error("WARNING_LOW_BALANCE");
         state.Balance -= MockState.ToMills(price);
         rent.Days += days;
@@ -334,7 +356,16 @@ internal static class MockHandlers
     private static JsonNode CloseRentNum(MockState state, MockRequest req)
     {
         var tzid = Int(req, "tzid", 0);
-        if (!state.Rents.Remove(tzid)) return Error("ERROR_WRONG_TZID");
+        if (!state.Rents.TryGetValue(tzid, out var rent)) return Error("ERROR_NO_OPERATIONS");
+        if (rent.Status == 0)
+        {
+            // `GuardInterval` stands in for the backend's first 120 s, during which a rent without any SMS stays open.
+            if (rent.Messages.Count == 0 && state.GuardIntervalSeconds > 0) return Error("NO_COMPLETE_TZID");
+            // Unconfirmed (no SMS or only `notify`): the reservation is released.
+            state.Frozen -= MockState.ToMills(rent.Sum);
+        }
+        // A confirmed rent closes without a refund.
+        state.Rents.Remove(tzid);
         state.Scheduled.Remove(tzid);
         return new JsonObject { ["response"] = "1" };
     }
@@ -420,8 +451,8 @@ internal static class MockHandlers
         },
     };
 
-    private static bool IsHttpUrl(string value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var url) && (url.Scheme == "http" || url.Scheme == "https") && url.Host.Length > 0;
+    /// <summary>The backend accepts any <c>scheme://…</c> URL.</summary>
+    private static readonly Regex AnyUrl = new Regex(@"^[a-z][a-z0-9+.-]*://\S+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static JsonNode PostProfile(MockState state, MockRequest req)
     {
@@ -447,7 +478,7 @@ internal static class MockHandlers
         if (profile.TryGetProperty("webhook_url", out var url))
         {
             if (url.ValueKind == JsonValueKind.Null) state.WebhookUrl = null;
-            else if (url.ValueKind == JsonValueKind.String && IsHttpUrl(url.GetString()!)) state.WebhookUrl = url.GetString();
+            else if (url.ValueKind == JsonValueKind.String && AnyUrl.IsMatch(url.GetString()!)) state.WebhookUrl = url.GetString();
             else return new JsonObject { ["response"] = new JsonObject { ["webhook_url"] = new JsonArray("The webhook url must be a valid URL.") } };
         }
         return new JsonObject { ["response"] = "1", ["user"] = new JsonObject { ["id"] = MockState.UserId, ["webhook_url"] = state.WebhookUrl } };
@@ -468,9 +499,9 @@ internal static class MockHandlers
             ["number"] = log.Number,
             ["sender"] = log.Sms.Service,
             ["message"] = log.Sms.Text,
-            ["code"] = log.Sms.Code,
-            ["time_start"] = log.Time,
-            ["time_left"] = MockState.OperationTime,
+            ["code"] = log.Sms.Code ?? "",
+            ["time_start"] = log.TimeStart,
+            ["time_left"] = log.TimeLeft,
         },
         ["status"] = "success",
         ["error"] = null,
@@ -489,14 +520,22 @@ internal static class MockHandlers
         ["response"] = "1",
         ["orders"] = Paginate(new List<JsonNode>(), Int(req, "page", 1), 10, "getPaymentHistory.php"),
         ["paylist"] = new JsonArray(),
-        ["domains"] = new JsonArray(),
+        ["domains"] = new JsonArray("onlinesim.io"),
+        ["forms"] = new JsonObject { ["1"] = "Card" },
         ["currency"] = new JsonObject { ["USD"] = 1 },
+        ["buttons"] = new JsonObject { ["USD"] = new JsonArray(5, 10, 20) },
     };
 
     // ----- free -----
 
-    private static readonly SortedDictionary<int, (string Name, string Text, Dictionary<string, (string Sender, string Text)[]> Numbers)> Free =
-        new SortedDictionary<int, (string, string, Dictionary<string, (string, string)[]>)>
+    /// <summary><c>ignore</c> of getFreeList: a note about prohibited services and their ids.</summary>
+    private const string FreeIgnore = "<p>Messages from these services are not shown:</p><p>1,2,3</p>";
+
+    /// <summary>Country codes in the backend's order: 44 first.</summary>
+    private static readonly int[] FreeOrder = { 44, 7 };
+
+    private static readonly Dictionary<int, (string Name, string Text, Dictionary<string, (string Sender, string Text)[]> Numbers)> Free =
+        new Dictionary<int, (string, string, Dictionary<string, (string, string)[]>)>
         {
             [44] = ("united_kingdom", "United Kingdom", new Dictionary<string, (string, string)[]>
             {
@@ -515,7 +554,7 @@ internal static class MockHandlers
     private static JsonNode GetFreeList(MockState state, MockRequest req)
     {
         var wanted = (int)Int(req, "country", 44);
-        var country = Free.ContainsKey(wanted) ? wanted : Free.Keys.First();
+        var country = Free.ContainsKey(wanted) ? wanted : FreeOrder[0];
         var data = Free[country];
         var numbers = new JsonObject();
         foreach (var n in data.Numbers.Keys)
@@ -537,24 +576,27 @@ internal static class MockHandlers
             ["text"] = m.Text,
             ["in_number"] = m.Sender,
             ["my_number"] = number,
-            ["created_at"] = MockState.Stamp(i),
+            ["created_at"] = Iso(i),
             ["data_humans"] = "1 day ago",
             ["code"] = MockState.ExtractCode(m.Text) ?? "-",
         }).ToList();
-        var page = Paginate(messages, Int(req, "page", 1), Int(req, "count", 10), "getFreeList");
+        var count = Math.Min(500, Math.Max(10, Int(req, "count", 10)));
+        var page = Paginate(messages, Math.Max(1, Int(req, "page", 1)), count, "getFreeList");
         page["number"] = number;
         page["country"] = country;
         return new JsonObject
         {
             ["response"] = 1,
-            ["countries"] = Array(Free.Select(c => (JsonNode?)new JsonObject
+            ["countries"] = Array(FreeOrder.Select(c => (JsonNode?)new JsonObject
             {
-                ["country"] = c.Key,
-                ["country_text"] = c.Value.Text,
-                ["country_original"] = c.Value.Name,
+                ["country"] = c,
+                ["country_text"] = Free[c].Text,
+                ["country_original"] = Free[c].Name,
             })),
             ["numbers"] = numbers,
             ["messages"] = page,
+            ["ignore"] = FreeIgnore,
+            ["content"] = null,
         };
     }
 }
